@@ -1,6 +1,6 @@
 """
-分析所有实验结果：N=10 + N=3 + BMC-Guided
-生成完整对比表格
+Analyze all experiment results: N=10 + N=3 + BMC-Guided.
+Produces the complete comparison table.
 """
 import json
 import os
@@ -9,24 +9,24 @@ import numpy as np
 
 
 def load_result_file(filepath):
-    """加载单个结果文件"""
+    """Load a single result file."""
     try:
         with open(filepath, 'r') as f:
             data = json.load(f)
             return data.get('metrics', {})
     except Exception as e:
-        print(f"⚠️  Error loading {filepath}: {e}")
+        print(f"[WARN] Error loading {filepath}: {e}")
         return None
 
 
 def load_all_results():
-    """加载所有实验结果"""
+    """Load the results of every experiment."""
     results = {
         'gsm8k': {},
         'math': {}
     }
     
-    # 方法列表
+    # Method registry
     methods_n10 = [
         ('greedy', 'Greedy'),
         ('self_consistency', 'Self-Consistency (N=10)'),
@@ -41,8 +41,8 @@ def load_all_results():
         ('best_of_n_bmc', 'Best-of-N (BMC, N=3)')
     ]
     
-    # 加载 N=10 结果
-    print("📂 Loading N=10 results from results_comparison/...")
+    # Load N=10 results
+    print("Loading N=10 results from results_comparison/...")
     for method_key, method_name in methods_n10:
         for dataset in ['gsm8k', 'math']:
             filepath = f"results_comparison/{dataset}_{method_key}_merged.json"
@@ -50,10 +50,10 @@ def load_all_results():
                 metrics = load_result_file(filepath)
                 if metrics:
                     results[dataset][method_name] = metrics
-                    print(f"  ✓ {dataset}/{method_key}")
+                    print(f"  [OK] {dataset}/{method_key}")
     
-    # 加载 N=3 结果
-    print("\n📂 Loading N=3 results from results_n3/...")
+    # Load N=3 results
+    print("\nLoading N=3 results from results_n3/...")
     for method_key, method_name in methods_n3:
         for dataset in ['gsm8k', 'math']:
             filepath = f"results_n3/{dataset}_{method_key}_merged.json"
@@ -61,21 +61,21 @@ def load_all_results():
                 metrics = load_result_file(filepath)
                 if metrics:
                     results[dataset][method_name] = metrics
-                    print(f"  ✓ {dataset}/{method_key}")
+                    print(f"  [OK] {dataset}/{method_key}")
     
     return results
 
 
 def generate_complete_table(results):
-    """生成完整对比表格"""
+    """Print the complete comparison table."""
     
     print("\n" + "=" * 120)
-    print("📊 完整对比实验结果 (N=10 + N=3 + BMC-Guided)")
+    print("Complete Comparison Results (N=10 + N=3 + BMC-Guided)")
     print("=" * 120 + "\n")
     
     datasets = ['gsm8k', 'math']
     
-    # 方法顺序
+    # Row order
     method_order = [
         'Greedy',
         'Self-Consistency (N=3)',
@@ -87,13 +87,13 @@ def generate_complete_table(results):
         'BMC-Guided (Ours)'
     ]
     
-    # 表头
+    # Header
     print("| Method | GSM8K | | | MATH | | |")
     print("|--------|-------|-----------|--------|------|-----------|--------|")
     print("| | Acc ↑ | Resamples | time (s) | Acc ↑ | Resamples | time (s) |")
     print("|--------|-------|-----------|--------|------|-----------|--------|")
     
-    # 每个方法的结果
+    # One row per method
     for method_name in method_order:
         row = [method_name]
         
@@ -116,10 +116,10 @@ def generate_complete_table(results):
 
 
 def generate_sampling_comparison(results):
-    """生成采样次数对比分析"""
+    """Compare methods across sampling budgets."""
     
     print("\n" + "=" * 120)
-    print("📈 采样次数对比分析")
+    print("Sampling Budget Comparison")
     print("=" * 120 + "\n")
     
     datasets = ['gsm8k', 'math']
@@ -127,11 +127,11 @@ def generate_sampling_comparison(results):
     for dataset in datasets:
         print(f"### {dataset.upper()}\n")
         
-        # Greedy基线
+        # Greedy baseline
         greedy_acc = results[dataset].get('Greedy', {}).get('accuracy', 0.0) * 100
         print(f"**Greedy Baseline**: {greedy_acc:.1f}%\n")
         
-        # Self-Consistency对比
+        # Self-Consistency
         print("**Self-Consistency**:")
         for n in [3, 10]:
             key = f'Self-Consistency (N={n})'
@@ -142,7 +142,7 @@ def generate_sampling_comparison(results):
                 time_s = metrics.get('avg_time', 0.0)
                 print(f"  - N={n}: {acc:.1f}% ({improvement:+.1f}%), Time: {time_s:.2f}s")
         
-        # Best-of-N (Confidence)对比
+        # Best-of-N (Confidence)
         print("\n**Best-of-N (Confidence)**:")
         for n in [3, 10]:
             key = f'Best-of-N (Confidence, N={n})'
@@ -153,7 +153,7 @@ def generate_sampling_comparison(results):
                 time_s = metrics.get('avg_time', 0.0)
                 print(f"  - N={n}: {acc:.1f}% ({improvement:+.1f}%), Time: {time_s:.2f}s")
         
-        # Best-of-N (BMC)对比
+        # Best-of-N (BMC)
         print("\n**Best-of-N (BMC)**:")
         for n in [3, 10]:
             key = f'Best-of-N (BMC, N={n})'
@@ -173,16 +173,16 @@ def generate_sampling_comparison(results):
             time_s = metrics.get('avg_time', 0.0)
             print(f"\n**BMC-Guided (Ours)**:")
             print(f"  - Avg N={avg_samples:.2f}: {acc:.1f}% ({improvement:+.1f}%), Time: {time_s:.2f}s")
-            print(f"  - 📊 与N=3对比：用{avg_samples:.2f}次采样")
+            print(f"  - vs N=3: uses {avg_samples:.2f} samples on average")
         
         print("\n" + "-" * 80 + "\n")
 
 
 def generate_key_findings(results):
-    """生成关键发现"""
+    """Summarize the key findings."""
     
     print("\n" + "=" * 120)
-    print("💡 关键发现")
+    print("Key Findings")
     print("=" * 120 + "\n")
     
     datasets = ['gsm8k', 'math']
@@ -192,7 +192,7 @@ def generate_key_findings(results):
         
         greedy_acc = results[dataset].get('Greedy', {}).get('accuracy', 0.0) * 100
         
-        # 找出N=3的最佳方法
+        # Best method at N=3
         best_n3_method = None
         best_n3_acc = 0.0
         for method_name in results[dataset]:
@@ -202,7 +202,7 @@ def generate_key_findings(results):
                     best_n3_acc = acc
                     best_n3_method = method_name
         
-        # 找出N=10的最佳方法
+        # Best method at N=10
         best_n10_method = None
         best_n10_acc = 0.0
         for method_name in results[dataset]:
@@ -221,37 +221,37 @@ def generate_key_findings(results):
             bmc_guided_acc = 0.0
             bmc_guided_samples = 0.0
         
-        print(f"1️⃣ **N=3的最佳方法**: {best_n3_method}")
-        print(f"   - 准确率: {best_n3_acc:.1f}% (vs Greedy: {best_n3_acc - greedy_acc:+.1f}%)")
+        print(f"1. **Best method at N=3**: {best_n3_method}")
+        print(f"   - Accuracy: {best_n3_acc:.1f}% (vs Greedy: {best_n3_acc - greedy_acc:+.1f}%)")
         
-        print(f"\n2️⃣ **N=10的最佳方法**: {best_n10_method}")
-        print(f"   - 准确率: {best_n10_acc:.1f}% (vs Greedy: {best_n10_acc - greedy_acc:+.1f}%)")
+        print(f"\n2. **Best method at N=10**: {best_n10_method}")
+        print(f"   - Accuracy: {best_n10_acc:.1f}% (vs Greedy: {best_n10_acc - greedy_acc:+.1f}%)")
         
         if bmc_guided_acc > 0:
-            print(f"\n3️⃣ **BMC-Guided (平均{bmc_guided_samples:.2f}次采样)**:")
-            print(f"   - 准确率: {bmc_guided_acc:.1f}%")
+            print(f"\n3. **BMC-Guided ({bmc_guided_samples:.2f} samples on average)**:")
+            print(f"   - Accuracy: {bmc_guided_acc:.1f}%")
             
-            # 与N=3对比
+            # Compare against the best N=3 method
             if best_n3_acc > 0:
                 diff_n3 = bmc_guided_acc - best_n3_acc
-                symbol_n3 = "📈" if diff_n3 > 0 else "📉" if diff_n3 < 0 else "➡️"
-                print(f"   - vs 最佳N=3: {diff_n3:+.1f}% {symbol_n3}")
+                symbol_n3 = "(up)" if diff_n3 > 0 else "(down)" if diff_n3 < 0 else "(same)"
+                print(f"   - vs best N=3: {diff_n3:+.1f}% {symbol_n3}")
             
-            # 与N=10对比
+            # Compare against the best N=10 method
             if best_n10_acc > 0:
                 diff_n10 = bmc_guided_acc - best_n10_acc
-                symbol_n10 = "📈" if diff_n10 > 0 else "📉" if diff_n10 < 0 else "➡️"
+                symbol_n10 = "(up)" if diff_n10 > 0 else "(down)" if diff_n10 < 0 else "(same)"
                 efficiency_gain = (10.0 / bmc_guided_samples) if bmc_guided_samples > 0 else 0
-                print(f"   - vs 最佳N=10: {diff_n10:+.1f}% {symbol_n10}, 采样减少{(1 - bmc_guided_samples/10)*100:.1f}%")
+                print(f"   - vs best N=10: {diff_n10:+.1f}% {symbol_n10}, {(1 - bmc_guided_samples/10)*100:.1f}% fewer samples")
         
         print("\n" + "-" * 80 + "\n")
 
 
 def generate_efficiency_ranking(results):
-    """生成效率排名"""
+    """Rank methods by accuracy gain per sample."""
     
     print("\n" + "=" * 120)
-    print("⚡ 效率排名 (Accuracy Gain per Sample)")
+    print("Efficiency Ranking (Accuracy Gain per Sample)")
     print("=" * 120 + "\n")
     
     datasets = ['gsm8k', 'math']
@@ -261,7 +261,7 @@ def generate_efficiency_ranking(results):
         
         greedy_acc = results[dataset].get('Greedy', {}).get('accuracy', 0.0) * 100
         
-        # 计算所有方法的效率
+        # Compute efficiency for every method
         efficiency_data = []
         
         for method_name in results[dataset]:
@@ -283,22 +283,21 @@ def generate_efficiency_ranking(results):
                 'efficiency': efficiency
             })
         
-        # 按效率排序
+        # Sort by efficiency
         efficiency_data.sort(key=lambda x: x['efficiency'], reverse=True)
         
         print("| Rank | Method | Accuracy | Samples | Efficiency* |")
         print("|------|--------|----------|---------|-------------|")
         
         for i, data in enumerate(efficiency_data, 1):
-            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else ""
-            print(f"| {i} {medal} | {data['method']} | {data['accuracy']:.1f}% | {data['samples']:.1f} | {data['efficiency']:.2f} |")
+            print(f"| {i} | {data['method']} | {data['accuracy']:.1f}% | {data['samples']:.1f} | {data['efficiency']:.2f} |")
         
         print(f"\n*Efficiency = (Accuracy - {greedy_acc:.1f}%) / Avg Samples\n")
         print("-" * 80 + "\n")
 
 
 def save_latex_table(results, output_file="complete_comparison.tex"):
-    """保存LaTeX格式的表格"""
+    """Write the comparison table in LaTeX format."""
     
     method_order = [
         'Greedy',
@@ -326,7 +325,7 @@ def save_latex_table(results, output_file="complete_comparison.tex"):
     ]
     
     for method_name in method_order:
-        # 格式化方法名
+        # Escape the method name for LaTeX
         formatted_name = method_name.replace("(N=", "($N$=").replace(")", ")")
         formatted_name = formatted_name.replace("_", "\\_")
         
@@ -360,27 +359,27 @@ def save_latex_table(results, output_file="complete_comparison.tex"):
     with open(output_file, 'w') as f:
         f.write(latex_content)
     
-    print(f"\n✅ LaTeX table saved to: {output_file}\n")
+    print(f"\n[OK] LaTeX table saved to: {output_file}\n")
 
 
 if __name__ == "__main__":
-    print("\n🔍 Loading all results (N=10 + N=3 + BMC-Guided)...\n")
+    print("\nLoading all results (N=10 + N=3 + BMC-Guided)...\n")
     
     results = load_all_results()
     
     if not results['gsm8k'] and not results['math']:
-        print("❌ No results found!")
+        print("[ERROR] No results found!")
         exit(1)
     
-    # 生成各种分析
+    # Run each analysis section
     generate_complete_table(results)
     generate_sampling_comparison(results)
     generate_key_findings(results)
     generate_efficiency_ranking(results)
     
-    # 保存LaTeX表格
+    # Export the LaTeX table
     save_latex_table(results)
     
     print("\n" + "=" * 120)
-    print("✅ Complete Analysis Finished!")
+    print("[OK] Complete Analysis Finished!")
     print("=" * 120 + "\n")

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-统一对比实验 - 验证脚本
-与基础eval框架完全兼容
-🔧 已修复：使用与基础实验完全相同的提取逻辑（last_boxed_only_string + remove_boxed）
+Unified comparison experiment - verification script.
+Fully compatible with the baseline eval framework.
+Fixed: uses exactly the same extraction logic as the baseline experiments (last_boxed_only_string + remove_boxed).
 """
 
 import json
@@ -15,54 +15,54 @@ import numpy as np
 
 
 # ============================================================
-# 答案提取逻辑 - 尝试从基础eval导入，失败则使用内置
+# Answer extraction - prefer the baseline eval parsers, fall back to the builtin ones
 # ============================================================
 
 def try_import_base_parsers():
-    """尝试从基础eval框架导入parser"""
+    """Try to import a parser from the baseline eval framework."""
     try:
         from parser_eval import parse_answers
-        print("✓ 使用基础eval的parser_eval.parse_answers")
+        print("[OK] Using parser_eval.parse_answers from the baseline eval")
         return parse_answers
     except ImportError:
         pass
     
     try:
         from parsers import parse_answers
-        print("✓ 使用基础eval的parsers.parse_answers")
+        print("[OK] Using parsers.parse_answers from the baseline eval")
         return parse_answers
     except ImportError:
         pass
     
     try:
         from verify import parse_answers
-        print("✓ 使用基础eval的verify.parse_answers")
+        print("[OK] Using verify.parse_answers from the baseline eval")
         return parse_answers
     except ImportError:
         pass
     
-    print("⚠️  未找到基础eval的parser，使用内置简化版本")
+    print("[WARN] No baseline eval parser found, falling back to the builtin simplified version")
     return None
 
 
-# 🔥 导入基础eval的关键函数
+# Import the key helper functions from the baseline eval
 def try_import_parser_helper():
-    """导入parser_helper中的关键函数"""
+    """Import the key functions from parser_helper."""
     try:
         from parser_helper import is_equiv, remove_boxed, last_boxed_only_string
-        print("✓ 成功导入parser_helper函数（is_equiv, remove_boxed, last_boxed_only_string）")
+        print("[OK] Imported parser_helper functions (is_equiv, remove_boxed, last_boxed_only_string)")
         return is_equiv, remove_boxed, last_boxed_only_string
     except ImportError:
-        print("⚠️  未找到parser_helper，将使用内置简化版本")
+        print("[WARN] parser_helper not found, falling back to the builtin simplified version")
         return None, None, None
 
-# 尝试导入parser_helper函数
+# Try to import the parser_helper functions
 base_is_equiv, base_remove_boxed, base_last_boxed_only_string = try_import_parser_helper()
 
 
-# 🔥 内置版本的parser_helper函数（如果导入失败）
+# Builtin replacements for the parser_helper functions (used when the import fails)
 def last_boxed_only_string_builtin(string):
-    """内置版本：提取最后一个\boxed内容"""
+    """Builtin version: extract the content of the last \boxed expression."""
     idx = string.rfind("\\boxed")
     if "\\boxed " in string:
         return "\\boxed " + string.split("\\boxed ")[-1].split("$")[0]
@@ -91,7 +91,7 @@ def last_boxed_only_string_builtin(string):
 
 
 def remove_boxed_builtin(s):
-    """内置版本：移除\boxed{}包装"""
+    """Builtin version: strip the \boxed{} wrapper."""
     if s is None:
         return None
     
@@ -111,35 +111,35 @@ def remove_boxed_builtin(s):
 
 
 def is_equiv_builtin(str1, str2):
-    """内置版本：简单的等价性检查"""
+    """Builtin version: simple equivalence check."""
     if str1 is None and str2 is None:
         return True
     if str1 is None or str2 is None:
         return False
     
-    # 简单的字符串比较
+    # Plain string comparison
     return str(str1).strip() == str(str2).strip()
 
 
-# 使用导入的函数或内置版本
+# Use the imported functions when available, otherwise the builtin ones
 last_boxed_only_string = base_last_boxed_only_string if base_last_boxed_only_string else last_boxed_only_string_builtin
 remove_boxed = base_remove_boxed if base_remove_boxed else remove_boxed_builtin
 is_equiv = base_is_equiv if base_is_equiv else is_equiv_builtin
 
 
-# 内置答案提取逻辑（与基础eval的parser_eval.py完全一致）
+# Builtin answer extraction (identical to parser_eval.py in the baseline eval)
 class BuiltinParser:
-    """内置答案提取器 - 与基础eval逻辑完全一致"""
+    """Builtin answer extractor - matches the baseline eval logic exactly."""
     
     @staticmethod
     def extract_answer_gsm8k(text: str) -> str:
-        """GSM8K答案提取 - #### 格式"""
+        """GSM8K answer extraction - #### format."""
         if not isinstance(text, str):
             text = str(text) if text is not None else ""
         
         text = re.sub(r'<[^>]+>', '', text)
         
-        # 查找#### 标记
+        # Look for the #### marker
         match = re.search(r'####\s*([+-]?[\d,\.]+)', text)
         if match:
             answer = match.group(1).replace(',', '')
@@ -148,7 +148,7 @@ class BuiltinParser:
             except:
                 return answer
         
-        # 提取最后一个数字
+        # Fall back to the last number in the text
         numbers = re.findall(r'[+-]?[\d,]+\.?\d*', text)
         if numbers:
             answer = numbers[-1].replace(',', '')
@@ -162,8 +162,8 @@ class BuiltinParser:
     @staticmethod
     def extract_answer_boxed(text: str) -> str:
         """
-        MATH/Olympic答案提取 - 使用与基础eval完全相同的逻辑
-        🔧 关键修复：使用last_boxed_only_string + remove_boxed
+        MATH/Olympic answer extraction - identical logic to the baseline eval.
+        Key fix: rely on last_boxed_only_string + remove_boxed.
         """
         if not isinstance(text, str):
             text = str(text) if text is not None else ""
@@ -171,7 +171,7 @@ class BuiltinParser:
         text = re.sub(r'<[^>]+>', '', text)
         parsed_answer = None
         
-        # Strategy 1: Extract from \boxed{} - 使用parser_helper的函数
+        # Strategy 1: Extract from \boxed{} using the parser_helper functions
         try:
             boxed_str = last_boxed_only_string(text)
             if boxed_str:
@@ -198,23 +198,23 @@ class BuiltinParser:
     
     @staticmethod
     def extract_answer_gpqa(text: str) -> str:
-        """GPQA答案提取 - 选择题 A/B/C/D"""
+        """GPQA answer extraction - multiple choice A/B/C/D."""
         if not isinstance(text, str):
             text = str(text) if text is not None else ""
         
         text = re.sub(r'<[^>]+>', '', text)
         
-        # 查找\boxed{A/B/C/D}
+        # Look for \boxed{A/B/C/D}
         boxed_matches = re.findall(r'\\boxed\{([A-Da-d])\}', text)
         if boxed_matches:
             return boxed_matches[-1].upper()
         
-        # 查找<answer>A/B/C/D</answer>
+        # Look for <answer>A/B/C/D</answer>
         answer_match = re.search(r'<answer>([A-Da-d])</answer>', text)
         if answer_match:
             return answer_match.group(1).upper()
         
-        # 查找最后出现的单独的A/B/C/D
+        # Fall back to the last standalone A/B/C/D token
         choice_matches = re.findall(r'\b([A-D])\b', text)
         if choice_matches:
             return choice_matches[-1].upper()
@@ -224,10 +224,10 @@ class BuiltinParser:
     @classmethod
     def parse_answers(cls, task: str, predictions: List[str], ground_truths: List[str], debug: bool = False) -> Tuple[int, int, List[Dict]]:
         """
-        解析答案并判断正确性
-        与基础eval的逻辑完全一致
+        Parse the answers and judge correctness.
+        Identical to the baseline eval logic.
         """
-        # 选择提取器
+        # Pick the extractor for this task
         if task == "gsm8k":
             extractor = cls.extract_answer_gsm8k
         elif task in ["math", "olympic"]:
@@ -245,20 +245,20 @@ class BuiltinParser:
         empty_gt_count = 0
         
         for idx, (pred_text, gt_text) in enumerate(zip(predictions, ground_truths)):
-            # 确保都是字符串
+            # Make sure both sides are strings
             if not isinstance(pred_text, str):
                 pred_text = str(pred_text) if pred_text is not None else ""
             if not isinstance(gt_text, str):
                 gt_text = str(gt_text) if gt_text is not None else ""
             
-            # 提取预测答案
+            # Extract the predicted answer
             pred_answer = extractor(pred_text)
             
-            # 🔥 处理ground truth - 与基础eval完全一致
+            # Process the ground truth exactly as the baseline eval does
             if task == "gpqa":
                 gt_answer = gt_text.strip().upper()
             else:
-                # 对于math/olympic，也需要从ground truth中提取
+                # For math/olympic the ground truth also needs to be extracted
                 processed_ground_truth = gt_text
                 if gt_text and "\\boxed" in gt_text:
                     try:
@@ -275,32 +275,32 @@ class BuiltinParser:
                 empty_gt_count += 1
             
             if debug and idx < 3:
-                print(f"\n  提取结果 {idx+1}:")
+                print(f"\n  Extraction result {idx+1}:")
                 print(f"    GT text: {repr(gt_text[:80] if len(gt_text) > 80 else gt_text)}")
                 print(f"    GT extracted: {repr(gt_answer)}")
                 print(f"    Pred text: {repr(pred_text[:80] if len(pred_text) > 80 else pred_text)}")
                 print(f"    Pred extracted: {repr(pred_answer)}")
             
-            # 判断正确性
+            # Judge correctness
             is_correct = False
             
             if pred_answer and gt_answer:
                 processed += 1
                 
                 if task in ["math", "olympic"]:
-                    # 使用is_equiv进行数学等价性检查
+                    # Use is_equiv for mathematical equivalence
                     try:
                         is_correct = is_equiv(pred_answer, gt_answer)
                     except Exception as e:
                         is_correct = (str(pred_answer).strip() == str(gt_answer).strip())
                 elif task == "gsm8k":
-                    # 数值答案
+                    # Numeric answer
                     try:
                         is_correct = (float(pred_answer) == float(gt_answer))
                     except:
                         is_correct = (pred_answer == gt_answer)
                 elif task == "gpqa":
-                    # 选择题
+                    # Multiple choice
                     is_correct = (pred_answer == gt_answer)
                 
                 if is_correct:
@@ -315,20 +315,20 @@ class BuiltinParser:
             })
         
         if debug:
-            print(f"\n提取统计:")
-            print(f"  总样本数: {len(predictions)}")
-            print(f"  空预测答案: {empty_pred_count}")
-            print(f"  空GT答案: {empty_gt_count}")
-            print(f"  成功处理: {processed}")
-            print(f"  正确: {correct}")
+            print(f"\nExtraction statistics:")
+            print(f"  Total samples: {len(predictions)}")
+            print(f"  Empty predicted answers: {empty_pred_count}")
+            print(f"  Empty ground-truth answers: {empty_gt_count}")
+            print(f"  Successfully processed: {processed}")
+            print(f"  Correct: {correct}")
         
         return correct, processed, detailed_results
 
 
-# 尝试导入基础eval的parser
+# Try to import the baseline eval parser
 base_parse_answers = try_import_base_parsers()
 
-# 如果导入成功，使用基础parser；否则使用内置parser
+# Prefer the baseline parser when available, otherwise use the builtin one
 if base_parse_answers is None:
     parse_answers_func = BuiltinParser.parse_answers
 else:
@@ -336,11 +336,11 @@ else:
 
 
 # ============================================================
-# 方法特定的验证逻辑
+# Method-specific verification logic
 # ============================================================
 
 def verify_greedy(generations: List[Dict], task: str) -> List[Dict]:
-    """验证Greedy方法"""
+    """Verify the Greedy method."""
     verified = []
     
     for item in generations:
@@ -354,7 +354,7 @@ def verify_greedy(generations: List[Dict], task: str) -> List[Dict]:
 
 
 def verify_self_consistency(generations: List[Dict], task: str) -> List[Dict]:
-    """验证Self-Consistency方法"""
+    """Verify the Self-Consistency method."""
     verified = []
     
     for item in generations:
@@ -395,7 +395,7 @@ def verify_self_consistency(generations: List[Dict], task: str) -> List[Dict]:
 
 
 def verify_best_of_n_confidence(generations: List[Dict], task: str) -> List[Dict]:
-    """验证Best-of-N (Confidence)方法"""
+    """Verify the Best-of-N (Confidence) method."""
     verified = []
     
     for item in generations:
@@ -418,7 +418,7 @@ def verify_best_of_n_confidence(generations: List[Dict], task: str) -> List[Dict
 
 
 def verify_best_of_n_bmc(generations: List[Dict], task: str) -> List[Dict]:
-    """验证Best-of-N (BMC)方法"""
+    """Verify the Best-of-N (BMC) method."""
     verified = []
     
     for item in generations:
@@ -441,7 +441,7 @@ def verify_best_of_n_bmc(generations: List[Dict], task: str) -> List[Dict]:
 
 
 def verify_bmc_guided(generations: List[Dict], task: str) -> List[Dict]:
-    """验证BMC-Guided方法"""
+    """Verify the BMC-Guided method."""
     verified = []
     
     for item in generations:
@@ -468,11 +468,11 @@ def verify_bmc_guided(generations: List[Dict], task: str) -> List[Dict]:
 
 
 # ============================================================
-# 主处理流程
+# Main processing pipeline
 # ============================================================
 
 def merge_distributed_results(results_dir: str, dataset: str, method: str, gen_length: int, steps: int) -> List[Dict]:
-    """合并所有rank的结果"""
+    """Merge the result shards produced by all ranks."""
     pattern = f"{results_dir}/{dataset}_{method}_{gen_length}_{steps}_*_generations.json"
     files = sorted(glob.glob(pattern))
     
@@ -490,16 +490,16 @@ def merge_distributed_results(results_dir: str, dataset: str, method: str, gen_l
 
 
 def process_method(results_dir: str, dataset: str, method: str, task: str, debug: bool = False):
-    """处理单个方法的结果"""
+    """Process the results of a single method."""
     print(f"\n{'=' * 80}")
-    print(f"处理: {dataset} - {method}")
+    print(f"Processing: {dataset} - {method}")
     print(f"{'=' * 80}")
     
     pattern = f"{results_dir}/{dataset}_{method}_*_*_*_generations.json"
     files = glob.glob(pattern)
     
     if not files:
-        print(f"⚠️  未找到结果文件: {pattern}")
+        print(f"[WARN] No result files found: {pattern}")
         return None
     
     with open(files[0], 'r') as f:
@@ -507,14 +507,14 @@ def process_method(results_dir: str, dataset: str, method: str, task: str, debug
         gen_length = data.get("gen_length", 128)
         steps = data.get("diffusion_steps", 64)
     
-    print(f"合并结果文件: {len(files)} 个文件")
+    print(f"Merging result files: {len(files)} files")
     all_generations = merge_distributed_results(results_dir, dataset, method, gen_length, steps)
     
     if not all_generations:
-        print(f"⚠️  没有生成数据")
+        print(f"[WARN] No generations available")
         return None
     
-    print(f"总样本数: {len(all_generations)}")
+    print(f"Total samples: {len(all_generations)}")
     
     method_base = method.split('_N')[0]
     
@@ -529,16 +529,16 @@ def process_method(results_dir: str, dataset: str, method: str, task: str, debug
     elif method_base == "bmc_guided":
         verified_data = verify_bmc_guided(all_generations, task)
     else:
-        print(f"⚠️  未知方法: {method_base}")
+        print(f"[WARN] Unknown method: {method_base}")
         return None
     
     predictions = [item["generations"] for item in verified_data]
     ground_truths = [item["ground_truth"] for item in verified_data]
     
     if debug:
-        print(f"\n调试信息 - 前3个样本:")
+        print(f"\nDebug info - first 3 samples:")
         for i in range(min(3, len(verified_data))):
-            print(f"\n样本 {i+1}:")
+            print(f"\nSample {i+1}:")
             gt = ground_truths[i]
             pred = predictions[i]
             print(f"  Ground truth type: {type(gt).__name__}")
@@ -553,10 +553,10 @@ def process_method(results_dir: str, dataset: str, method: str, task: str, debug
     
     accuracy = correct / processed if processed > 0 else 0.0
     
-    print(f"✓ 正确: {correct}/{processed} = {accuracy*100:.2f}%")
+    print(f"[OK] Correct: {correct}/{processed} = {accuracy*100:.2f}%")
     
     avg_samples = calculate_avg_samples(method, verified_data)
-    print(f"✓ 平均样本数: {avg_samples:.2f}")
+    print(f"[OK] Average samples: {avg_samples:.2f}")
     
     output_file = f"{results_dir}/{dataset}_{method}_aggregated.json"
     output_data = {
@@ -572,13 +572,13 @@ def process_method(results_dir: str, dataset: str, method: str, task: str, debug
     with open(output_file, 'w') as f:
         json.dump(output_data, f, indent=2)
     
-    print(f"✓ 保存结果: {output_file}")
+    print(f"[OK] Results saved: {output_file}")
     
     return output_data
 
 
 def calculate_avg_samples(method: str, verified_data: List[Dict]) -> float:
-    """计算平均样本数"""
+    """Compute the average number of samples per question."""
     method_base = method.split('_N')[0]
     
     if method_base == "greedy":
@@ -609,17 +609,17 @@ def main():
     args = parser.parse_args()
     
     if not os.path.exists(args.results_dir):
-        print(f"❌ 结果目录不存在: {args.results_dir}")
+        print(f"[ERROR] Results directory does not exist: {args.results_dir}")
         return
     
     print("\n" + "=" * 80)
-    print("统一对比实验 - 验证脚本 (🔧 使用parser_helper函数)")
+    print("Unified comparison experiment - verification script (using parser_helper functions)")
     print("=" * 80)
     
     all_files = glob.glob(f"{args.results_dir}/*_generations.json")
     
     if not all_files:
-        print(f"❌ 未找到任何结果文件")
+        print(f"[ERROR] No result files found")
         return
     
     datasets_methods = set()
@@ -638,7 +638,7 @@ def main():
     
     datasets_methods = sorted(datasets_methods)
     
-    print(f"\n发现 {len(datasets_methods)} 个数据集-方法组合:")
+    print(f"\nFound {len(datasets_methods)} dataset-method combinations:")
     for dataset, method in datasets_methods:
         print(f"  - {dataset}: {method}")
     
@@ -654,16 +654,16 @@ def main():
             results[dataset][method] = result
     
     print("\n" + "=" * 80)
-    print("✅ 验证完成!")
+    print("Verification complete!")
     print("=" * 80)
-    print(f"\n总结:")
+    print(f"\nSummary:")
     for dataset in sorted(results.keys()):
         print(f"\n{dataset.upper()}:")
         for method in sorted(results[dataset].keys()):
             r = results[dataset][method]
             print(f"  {method:35s}: {r['accuracy']*100:6.2f}% ({r['correct']}/{r['processed']})")
     
-    print(f"\n💡 下一步: python analyze_comparison.py --results_dir {args.results_dir}")
+    print(f"\nNext step: python analyze_comparison.py --results_dir {args.results_dir}")
 
 
 if __name__ == "__main__":

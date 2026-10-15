@@ -147,7 +147,7 @@ def strip_string(string):
 
     # remove percentage
     string = string.replace("\\%", "")
-    string = string.replace("\%", "")  # noqa: W605
+    string = string.replace(r"\%", "")
 
     # " 0." equivalent to " ." and "{0." equivalent to "{." Alternatively, add "0" if "." is the start of the string
     string = string.replace(" .", " 0.")
@@ -198,7 +198,7 @@ def fix_a_slash_b(string):
 
 
 def eval_math_expression(expr_str):
-    """
+    r"""
     Try to evaluate a mathematical expression to a numerical value.
     Handles common LaTeX expressions like \sqrt{}, \frac{}{}, etc.
     Uses sympy for robust symbolic computation if available.

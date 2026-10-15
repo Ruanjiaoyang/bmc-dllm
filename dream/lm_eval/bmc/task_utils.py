@@ -1,6 +1,6 @@
 """
-统一的答案提取和验证工具 - 多任务适配（与 lm_eval 框架完全匹配）
-支持 GSM8K, MATH500, Sudoku, Countdown, HumanEval, MBPP 等任务
+Unified answer extraction and validation utilities, aligned with the lm_eval framework.
+Supports GSM8K, MATH500, Sudoku, Countdown, HumanEval, MBPP and similar tasks.
 """
 import os
 import re
@@ -9,11 +9,11 @@ import signal
 from typing import Optional, Any, Tuple, Dict, List
 import warnings
 
-# 设置日志
+# Logging setup
 eval_logger = logging.getLogger(__name__)
 
 # ============================================================================
-# 导入 MATH 任务所需的库（符号数学验证）
+# Libraries required by the MATH task (symbolic verification)
 # ============================================================================
 try:
     import sympy
@@ -33,44 +33,44 @@ except (ModuleNotFoundError, ImportError, AssertionError) as e:
     )
 
 # ============================================================================
-# 导入 Code Eval 模块（HuggingFace evaluate code_eval）
+# Code evaluation module (HuggingFace evaluate code_eval)
 # ============================================================================
 try:
     import evaluate as hf_evaluate
     _code_eval_module = hf_evaluate.load("code_eval")
-    # 预热测试（确保沙箱可用）
+    # Warm-up check that confirms the sandbox is usable
     _test_preds = [["def add(a,b): return a*b"]]
     _test_refs = ["assert add(2, 3)==5"]
     _code_eval_module.compute(references=_test_refs, predictions=_test_preds, k=[1])
     CODE_EVAL_AVAILABLE = True
-    eval_logger.info("✓ HuggingFace code_eval 模块加载成功")
+    eval_logger.info("[OK] HuggingFace code_eval module loaded")
 except Exception as e:
     CODE_EVAL_AVAILABLE = False
     _code_eval_module = None
     eval_logger.warning(
-        f"HuggingFace code_eval 模块不可用: {e}. "
+        f"HuggingFace code_eval module is unavailable: {e}. "
         "Code execution will fall back to subprocess validation. "
         "Install with: pip install evaluate && HF_ALLOW_CODE_EVAL=1"
     )
 
 
 class AnswerExtractor:
-    """统一的答案提取器（与 lm_eval 框架匹配）"""
+    """Unified answer extractor, matching the lm_eval framework."""
     
     @staticmethod
     def extract_gsm8k(text: str) -> Optional[str]:
         """
-        提取 GSM8K 格式的答案（与 lm_eval 框架匹配）
-        优先级：
-        1. "The answer is X." 格式（strict-match）
-        2. 灵活提取最后的数字（flexible-extract）
+        Extract a GSM8K-style answer, matching the lm_eval framework.
+        Priority:
+        1. The "The answer is X." form (strict-match)
+        2. Flexible extraction of the last number (flexible-extract)
         """
         if isinstance(text, (int, float)):
             return str(int(text))
         
         text = str(text)
         
-        # 优先级1: strict-match - "The answer is X."
+        # Priority 1: strict-match - "The answer is X."
         match = re.search(r'The answer is (\-?[0-9\.\,]+)\.', text, re.IGNORECASE)
         if match:
             num_str = match.group(1).replace(',', '')
@@ -79,15 +79,15 @@ class AnswerExtractor:
             except:
                 return num_str
         
-        # 优先级2: flexible-extract - 提取最后的数字（支持货币符号、逗号）
-        # 匹配模式：(-?[$0-9.,]{2,})|(-?[0-9]+)
+        # Priority 2: flexible-extract - last number, allowing currency symbols and commas
+        # Pattern: (-?[$0-9.,]{2,})|(-?[0-9]+)
         matches = re.findall(r'(-?[$0-9.,]{2,})|(-?[0-9]+)', text)
         if matches:
-            # 取最后一个匹配
+            # Keep the last match
             last_match = matches[-1]
-            # last_match 是一个元组，取非空的那个
+            # last_match is a tuple; take whichever group is non-empty
             num_str = last_match[0] if last_match[0] else last_match[1]
-            # 清理：移除 $ 和 ,
+            # Strip $ and , characters
             num_str = num_str.replace('$', '').replace(',', '')
             try:
                 return str(int(float(num_str)))
@@ -99,25 +99,25 @@ class AnswerExtractor:
     @staticmethod
     def extract_math500(text: str) -> Optional[str]:
         """
-        提取 MATH500 格式的答案（与 lm_eval 框架匹配）
-        格式：\\boxed{...}
+        Extract a MATH500-style answer, matching the lm_eval framework.
+        Format: \\boxed{...}
         """
         if isinstance(text, (int, float)):
             return str(int(text))
         
         text = str(text)
         
-        # 使用 lm_eval 框架的 last_boxed_only_string 逻辑
+        # Reuse the last_boxed_only_string logic from the lm_eval framework
         try:
             boxed_str = AnswerExtractor._last_boxed_only_string(text)
             if boxed_str:
-                # 移除 \boxed{} 包装
+                # Strip the \boxed{} wrapper
                 answer = AnswerExtractor._remove_boxed(boxed_str)
                 return answer
         except Exception as e:
             eval_logger.debug(f"Failed to extract boxed answer: {e}")
         
-        # 如果没有 \boxed，尝试提取 "Final Answer: The final answer is X."
+        # Without \boxed, try the "Final Answer: The final answer is X." form
         try:
             match = re.search(
                 r"Final Answer: The final answer is(.*?)\. I hope it is correct\.",
@@ -128,15 +128,15 @@ class AnswerExtractor:
         except Exception as e:
             eval_logger.debug(f"Failed to extract final answer: {e}")
         
-        # 最后尝试：提取任何数字或表达式
+        # Last resort: extract any number or expression
         try:
-            # 尝试找最后一个看起来像答案的部分
-            # 匹配数字、分数、根号等
+            # Look for the last span that resembles an answer,
+            # matching numbers, fractions, radicals, and so on
             patterns = [
-                r'=\s*([^=\n]+)$',  # 等号后的内容
+                r'=\s*([^=\n]+)$',  # Whatever follows an equals sign
                 r'(?:answer|result|solution)\s*(?:is|=)\s*([^.\n]+)',  # "answer is X"
                 r'\\text\{([^}]+)\}',  # \text{X}
-                r'(-?\d+\.?\d*)',  # 纯数字
+                r'(-?\d+\.?\d*)',  # Bare number
             ]
             
             for pattern in patterns:
@@ -150,7 +150,7 @@ class AnswerExtractor:
     
     @staticmethod
     def _last_boxed_only_string(string: str) -> Optional[str]:
-        """提取最后一个 \boxed{} 内容（来自 lm_eval 框架，增强错误处理）"""
+        """Extract the last \boxed{} span (from the lm_eval framework, with extra guards)."""
         try:
             idx = string.rfind("\\boxed")
             if "\\boxed " in string:
@@ -183,24 +183,24 @@ class AnswerExtractor:
     
     @staticmethod
     def _remove_boxed(s: str) -> str:
-        """移除 \boxed{} 包装（来自 lm_eval 框架）"""
-        # 处理 \boxed 空格格式
+        """Strip the \boxed{} wrapper (from the lm_eval framework)."""
+        # Handle the "\boxed " (space-separated) form
         if "\\boxed " in s:
             left = "\\boxed "
             if s.startswith(left):
                 return s[len(left):]
             return s
 
-        # 处理 \boxed{} 格式
+        # Handle the \boxed{} form
         left = "\\boxed{"
         
-        # 🔧 修复：使用 try-except 而不是 assert
+        # Use try/except instead of assert so malformed input does not crash
         try:
             if not s.startswith(left):
-                # 如果不是标准格式，尝试查找并提取
+                # Non-standard layout: search for the wrapper and extract it
                 if left in s:
                     start_idx = s.index(left) + len(left)
-                    # 找到匹配的右括号
+                    # Find the matching closing brace
                     brace_count = 1
                     for i in range(start_idx, len(s)):
                         if s[i] == '{':
@@ -209,65 +209,65 @@ class AnswerExtractor:
                             brace_count -= 1
                             if brace_count == 0:
                                 return s[start_idx:i]
-                    # 没找到匹配的右括号，返回剩余部分
+                    # No matching closing brace; return the remainder
                     return s[start_idx:]
-                # 完全没有 \boxed，返回原字符串
+                # No \boxed at all; return the string unchanged
                 return s
             
             if not s.endswith("}"):
-                # 缺少右括号，返回左括号后的所有内容
+                # Missing closing brace; return everything after the opening one
                 return s[len(left):]
             
-            # 标准格式
+            # Standard layout
             return s[len(left):-1]
         
         except Exception as e:
-            # 任何异常都返回原字符串
+            # On any failure, return the original string
             eval_logger.debug(f"Failed to remove boxed from '{s}': {e}")
             return s
 
     @staticmethod
     def extract_sudoku(text: str) -> Optional[str]:
-        """提取 Sudoku 答案（改进版 - 更健壮的提取）"""
+        """Extract a Sudoku answer, tolerating a range of output formats."""
         text = str(text)
 
-        # 优先级1: <answer> 标签中的内容
+        # Priority 1: the contents of an <answer> tag
         answer_match = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
         if answer_match:
-            # 移除所有空白字符和分隔符
+            # Drop all whitespace and separator characters
             candidate = answer_match.group(1)
-            candidate = re.sub(r'[\s\-\|\+]', '', candidate)  # 移除空格、横线、竖线、加号
-            # 提取数字部分
+            candidate = re.sub(r'[\s\-\|\+]', '', candidate)  # Spaces, dashes, pipes, plus signs
+            # Keep only the digits
             digits = re.findall(r'\d', candidate)
             if len(digits) >= 16:
                 return ''.join(digits[:16])
             elif len(digits) > 0:
                 return ''.join(digits)
 
-        # 优先级2: 文本中连续的16位数字（考虑可能有空格）
-        # 先尝试无空格版本
+        # Priority 2: 16 consecutive digits in the text, possibly separated by spaces
+        # First try the variant without separators
         matches = re.findall(r'\b(\d{16})\b', text)
         if matches:
             return matches[-1]
 
-        # 尝试有分隔符的版本（例如 "1234 1234 1234 1234"）
+        # Then the separated variant, e.g. "1234 1234 1234 1234"
         matches = re.findall(r'(\d[\d\s]{14,30}\d)', text)
         for match in reversed(matches):
             digits = re.findall(r'\d', match)
             if len(digits) == 16:
                 return ''.join(digits)
 
-        # 优先级3: 提取文本末尾的所有数字
-        # 只看最后200个字符，避免问题描述干扰
+        # Priority 3: take the digits near the end of the text.
+        # Only the last 200 characters, so the problem statement does not interfere.
         tail = text[-200:] if len(text) > 200 else text
         digits = re.findall(r'\d', tail)
         if len(digits) >= 16:
             return ''.join(digits[:16])
 
-        # 优先级4: 提取全文的所有数字（最后的尝试）
+        # Priority 4: fall back to every digit in the text
         digits = re.findall(r'\d', text)
         if len(digits) >= 16:
-            return ''.join(digits[-16:])  # 取最后16个数字！
+            return ''.join(digits[-16:])  # Keep the last 16 digits
         elif len(digits) > 0:
             return ''.join(digits)
 
@@ -276,42 +276,42 @@ class AnswerExtractor:
     @staticmethod
     def extract_countdown(text: str) -> Optional[str]:
         """
-        提取 Countdown 算术表达式
-        格式：\\boxed{a + b * c} 或直接的表达式
+        Extract a Countdown arithmetic expression.
+        Format: \\boxed{a + b * c} or a bare expression.
         """
         text = str(text)
 
-        # 首先尝试 \boxed{} 格式
+        # First try the \boxed{} form
         boxed_match = re.search(r'\\boxed\{([^}]+)\}', text)
         if boxed_match:
             expr = boxed_match.group(1).strip()
-            # 移除可能的等号和目标数字
+            # Drop a trailing "= target" if present
             expr = re.sub(r'\s*=\s*\d+\s*$', '', expr)
-            # 替换LaTeX运算符为Python运算符
+            # Rewrite LaTeX operators as Python operators
             expr = expr.replace(r'\div', '/').replace(r'\times', '*').replace(r'\cdot', '*')
             return expr
 
-        # 尝试在 <answer> 标签中查找
+        # Then look inside an <answer> tag
         answer_match = re.search(r'<answer>\s*([^<]+)\s*</answer>', text)
         if answer_match:
             expr = answer_match.group(1).strip()
-            # 清理可能的 \boxed{}
+            # Remove a nested \boxed{} wrapper if present
             expr = re.sub(r'\\boxed\{([^}]+)\}', r'\1', expr)
             expr = re.sub(r'\s*=\s*\d+\s*$', '', expr)
-            # 替换LaTeX运算符为Python运算符
+            # Rewrite LaTeX operators as Python operators
             expr = expr.replace(r'\div', '/').replace(r'\times', '*').replace(r'\cdot', '*')
             return expr
 
-        # 尝试找最后一个看起来像表达式的行
+        # Otherwise take the last line that looks like an expression
         lines = text.strip().split('\n')
         for line in reversed(lines):
             line = line.strip()
-            # 检查是否包含算术运算符
+            # Check for arithmetic operators
             if any(op in line for op in ['+', '-', '*', '/']):
-                # 移除等号和目标数字
+                # Drop a trailing "= target" if present
                 expr = re.sub(r'\s*=\s*\d+\s*$', '', line)
                 if expr:
-                    # 替换LaTeX运算符为Python运算符
+                    # Rewrite LaTeX operators as Python operators
                     expr = expr.replace(r'\div', '/').replace(r'\times', '*').replace(r'\cdot', '*')
                     return expr
 
@@ -320,16 +320,16 @@ class AnswerExtractor:
     @staticmethod
     def extract_humaneval(text: str) -> Optional[str]:
         """
-        提取 HumanEval 代码（与 lm_eval 框架匹配）
-        格式：从 ```python 代码块中提取
+        Extract HumanEval code, matching the lm_eval framework.
+        Format: taken from a ```python code block.
         """
         text = str(text)
         
-        # 方法1: 优先提取 <answer> 标签中的内容
+        # Method 1: prefer the contents of an <answer> tag
         answer_match = re.search(r'<answer>\s*(.*?)\s*</answer>', text, re.DOTALL | re.IGNORECASE)
         if answer_match:
             code = answer_match.group(1).strip()
-            # 如果包含代码块标记，提取代码块内容
+            # If a code fence is present, take the fenced contents
             python_block = re.search(r'```python\s*\n(.*?)```', code, re.DOTALL)
             if python_block:
                 return python_block.group(1).strip()
@@ -338,21 +338,21 @@ class AnswerExtractor:
             if code_block:
                 return code_block.group(1).strip()
             
-            # 如果answer标签内没有代码块标记，直接返回内容
+            # Without a code fence inside the answer tag, return the raw contents
             return code
         
-        # 方法2: 提取 ```python 代码块（与 lm_eval 匹配）
-        # 使用 split 方法：r.split('```python\n', 1)[-1].split('```')[0]
+        # Method 2: take a ```python code block, as lm_eval does
+        # via r.split('```python\n', 1)[-1].split('```')[0]
         if '```python\n' in text:
             extracted = text.split('```python\n', 1)[-1].split('```')[0]
             return extracted.strip()
         
-        # 方法3: 提取任意 ``` 代码块
+        # Method 3: take any ``` code block
         code_block_match = re.search(r'```\s*\n(.*?)```', text, re.DOTALL)
         if code_block_match:
             return code_block_match.group(1).strip()
         
-        # 方法4: 如果文本看起来像代码（包含 def 关键字），直接返回
+        # Method 4: if the text looks like code (it contains def), return it directly
         if 'def ' in text:
             def_match = re.search(r'(def\s+\w+.*)', text, re.DOTALL)
             if def_match:
@@ -363,29 +363,29 @@ class AnswerExtractor:
     @staticmethod
     def extract_mbpp(text: str) -> Optional[str]:
         """
-        提取 MBPP 代码（与 lm_eval 框架匹配）
-        格式：从 ```python 代码块中提取
+        Extract MBPP code, matching the lm_eval framework.
+        Format: taken from a ```python code block.
         """
-        # MBPP 和 HumanEval 的提取逻辑相同
+        # MBPP and HumanEval share the same extraction logic
         return AnswerExtractor.extract_humaneval(text)
     
     @staticmethod
     def extract_gpqa(text: str) -> Optional[str]:
         """
-        提取 GPQA 答案（选择题 A/B/C/D）
-        与 LLaDA 完全对齐
+        Extract a GPQA answer (multiple choice, A/B/C/D).
+        Fully aligned with LLaDA.
         """
         if not text:
             return None
         
         text = str(text)
         
-        # 优先级1: \\boxed{X} 格式（最可靠）
+        # Priority 1: the \\boxed{X} form (most reliable)
         match = re.search(r'\\boxed\{([A-Da-d])\}', text, re.IGNORECASE)
         if match:
             return match.group(1).upper()
         
-        # 优先级2: <answer>标签内
+        # Priority 2: inside an <answer> tag
         answer_section = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
         if answer_section:
             match = re.search(r'\b([A-Da-d])\b', answer_section.group(1), re.IGNORECASE)
@@ -395,7 +395,7 @@ class AnswerExtractor:
             if match:
                 return match.group(1).upper()
         
-        # 优先级3: 显式答案声明
+        # Priority 3: explicit answer statements
         patterns = [
             r'The correct answer is[:\s]*([A-Da-d])\b',
             r'The answer is[:\s]*([A-Da-d])\b',
@@ -409,7 +409,7 @@ class AnswerExtractor:
             if match:
                 return match.group(1).upper()
         
-        # 优先级4: 独立的选项字母（低置信度）
+        # Priority 4: a bare option letter (low confidence)
         matches = re.findall(r'\b([A-Da-d])\b', text, re.IGNORECASE)
         if matches:
             return matches[-1].upper()
@@ -419,20 +419,20 @@ class AnswerExtractor:
     @staticmethod
     def extract_arc(text: str) -> Optional[str]:
         """
-        提取 ARC 答案（选择题 A/B/C/D/E）
-        与 LLaDA 完全对齐
+        Extract an ARC answer (multiple choice, A/B/C/D/E).
+        Fully aligned with LLaDA.
         """
         if not text:
             return None
         
         text = str(text)
         
-        # 优先级1: \\boxed{X} 格式（最可靠）
+        # Priority 1: the \\boxed{X} form (most reliable)
         match = re.search(r'\\boxed\{([A-Ea-e])\}', text, re.IGNORECASE)
         if match:
             return match.group(1).upper()
         
-        # 优先级2: <answer>标签内
+        # Priority 2: inside an <answer> tag
         answer_section = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
         if answer_section:
             match = re.search(r'\b([A-Ea-e])\b', answer_section.group(1), re.IGNORECASE)
@@ -442,7 +442,7 @@ class AnswerExtractor:
             if match:
                 return match.group(1).upper()
         
-        # 优先级3: 显式答案声明
+        # Priority 3: explicit answer statements
         patterns = [
             r'The correct answer is[:\s]*([A-Ea-e])\b',
             r'The answer is[:\s]*([A-Ea-e])\b',
@@ -456,7 +456,7 @@ class AnswerExtractor:
             if match:
                 return match.group(1).upper()
         
-        # 优先级4: 独立的选项字母（低置信度）
+        # Priority 4: a bare option letter (low confidence)
         matches = re.findall(r'\b([A-Ea-e])\b', text, re.IGNORECASE)
         if matches:
             return matches[-1].upper()
@@ -466,13 +466,13 @@ class AnswerExtractor:
 
 
 class AnswerValidator:
-    """统一的答案验证器（与 lm_eval 框架匹配）"""
+    """Unified answer validator, matching the lm_eval framework."""
 
     @staticmethod
     def validate_gsm8k(generated: Any, ground_truth: Any, **kwargs) -> Tuple[bool, dict]:
         """
-        验证 GSM8K 答案（与 lm_eval 框架匹配）
-        使用 exact_match 指标，忽略逗号、美元符号等
+        Validate a GSM8K answer, matching the lm_eval framework.
+        Uses the exact_match metric and ignores commas, dollar signs, and similar.
         """
         if generated is None or ground_truth is None:
             return False, {"error": "None value"}
@@ -480,15 +480,15 @@ class AnswerValidator:
         gen_str = str(generated).strip()
         gt_str = str(ground_truth).strip()
         
-        # 移除逗号和美元符号（与 lm_eval 的 regexes_to_ignore 匹配）
+        # Drop commas and dollar signs, matching lm_eval's regexes_to_ignore
         gen_str = gen_str.replace(',', '').replace('$', '')
         gt_str = gt_str.replace(',', '').replace('$', '')
         
-        # 移除 "#### " 前缀（如果存在）
+        # Drop the "#### " prefix if present
         gen_str = re.sub(r'(?s).*#### ', '', gen_str)
         gt_str = re.sub(r'(?s).*#### ', '', gt_str)
         
-        # 移除末尾的点
+        # Drop a trailing period
         gen_str = re.sub(r'\.$', '', gen_str)
         gt_str = re.sub(r'\.$', '', gt_str)
         
@@ -502,8 +502,8 @@ class AnswerValidator:
     @staticmethod
     def validate_math500(generated: Any, ground_truth: Any, **kwargs) -> Tuple[bool, dict]:
         """
-        验证 MATH500 答案（与 lm_eval 框架匹配）
-        使用符号数学验证（sympy + math_verify）
+        Validate a MATH500 answer, matching the lm_eval framework.
+        Uses symbolic verification (sympy + math_verify).
         """
         if generated is None or ground_truth is None:
             return False, {"error": "None value"}
@@ -517,7 +517,7 @@ class AnswerValidator:
             "method": None
         }
         
-        # 🔥 FIX: 优先使用normalize比较（最可靠）
+        # Prefer the normalized string comparison, which is the most reliable
         gen_normalized = AnswerValidator._normalize_final_answer(gen_str)
         gt_normalized = AnswerValidator._normalize_final_answer(gt_str)
         
@@ -528,7 +528,7 @@ class AnswerValidator:
             details["method"] = "normalized_string"
             return True, details
         
-        # 尝试数值比较
+        # Next, try a numerical comparison
         try:
             gen_num = float(gen_normalized.replace(',', ''))
             gt_num = float(gt_normalized.replace(',', ''))
@@ -541,14 +541,14 @@ class AnswerValidator:
         except:
             pass
         
-        # 🔥 FIX: 只有在normalize和数值比较都失败时，才使用符号验证
-        # 并且添加额外的验证：符号验证通过后，再次检查normalize结果
+        # Only fall back to symbolic verification when both the normalized and
+        # numerical comparisons fail, and re-check the normalized forms afterwards.
         if MATH_VERIFY_AVAILABLE:
             try:
-                # 方法1: 使用 math_verify 库
+                # Method 1: the math_verify library
                 res = verify(parse(gt_str), parse(gen_str))
                 if res:
-                    # 🔥 额外验证：如果normalize结果不同，不信任符号验证
+                    # Extra guard: distrust symbolic equality if the normalized forms differ
                     if gen_normalized != gt_normalized:
                         eval_logger.warning(
                             f"math_verify says equal but normalize disagrees: "
@@ -561,11 +561,11 @@ class AnswerValidator:
             except Exception as e:
                 eval_logger.debug(f"math_verify failed: {e}")
             
-            # 方法2: 使用 sympy 的 is_equiv
+            # Method 2: sympy's is_equiv
             try:
                 is_correct = AnswerValidator._is_equiv_sympy(gen_str, gt_str)
                 if is_correct:
-                    # 🔥 额外验证：如果normalize结果不同，不信任符号验证
+                    # Extra guard: distrust symbolic equality if the normalized forms differ
                     if gen_normalized != gt_normalized:
                         eval_logger.warning(
                             f"sympy says equal but normalize disagrees: "
@@ -583,7 +583,7 @@ class AnswerValidator:
     
     @staticmethod
     def _is_equiv_sympy(x1: str, x2: str) -> bool:
-        """使用 sympy 判断两个表达式是否等价（来自 lm_eval 框架）"""
+        """Decide with sympy whether two expressions are equivalent (from lm_eval)."""
         if not MATH_VERIFY_AVAILABLE:
             return False
         
@@ -620,7 +620,7 @@ class AnswerValidator:
     
     @staticmethod
     def _normalize_final_answer(final_answer: str) -> str:
-        """标准化答案（来自 lm_eval 框架）"""
+        """Normalize an answer string (from the lm_eval framework)."""
         SUBSTITUTIONS = [
             ("an ", ""),
             ("a ", ""),
@@ -671,7 +671,7 @@ class AnswerValidator:
     
     @staticmethod
     class _timeout:
-        """超时上下文管理器（来自 lm_eval 框架）"""
+        """Timeout context manager (from the lm_eval framework)."""
         def __init__(self, seconds=1, error_message="Timeout"):
             self.seconds = seconds
             self.error_message = error_message
@@ -694,14 +694,14 @@ class AnswerValidator:
         **kwargs
     ) -> Tuple[bool, dict]:
         """
-        验证 Sudoku 答案（修复版 - 更健壮的 puzzle 提取）
+        Validate a Sudoku answer, with robust extraction of the source puzzle.
 
         Returns:
             (is_correct, details) where details contains:
-                - correct_cells: 正确填写的空格数
-                - empty_cells: 总空格数
-                - accuracy: 准确率
-                - puzzle_extracted: 是否成功提取puzzle
+                - correct_cells: Number of blank cells filled in correctly
+                - empty_cells: Total number of blank cells
+                - accuracy: Fraction of blank cells filled in correctly
+                - puzzle_extracted: Whether the puzzle was extracted successfully
         """
         if generated is None or ground_truth is None:
             return False, {
@@ -714,16 +714,16 @@ class AnswerValidator:
         solution_str = str(generated)
         gt_str = str(ground_truth)
 
-        # 🔥 修复：更健壮的 puzzle 提取逻辑
+        # Robust puzzle extraction
         puzzle_str = None
 
         if question:
-            # 方法1: 尝试多种格式的正则匹配
+            # Method 1: try several regex formats
             patterns = [
                 r'puzzle:\s*([0-9]{16})',  # "puzzle: 1234123412341234"
                 r'Puzzle:\s*([0-9]{16})',  # "Puzzle: 1234123412341234"
                 r':\s*([0-9]{16})',        # ": 1234123412341234"
-                r'([0-9]{16})',            # "1234123412341234"（宽松匹配）
+                r'([0-9]{16})',            # "1234123412341234" (lenient match)
             ]
 
             for pattern in patterns:
@@ -732,15 +732,15 @@ class AnswerValidator:
                     puzzle_str = match.group(1)
                     break
 
-            # 方法2: 如果question本身就是16位数字
+            # Method 2: the question itself may be the 16-digit puzzle
             if puzzle_str is None and len(question.strip()) == 16:
                 if re.match(r'^[0-9]{16}$', question.strip()):
                     puzzle_str = question.strip()
 
-        # 🚨 如果还是提取失败，返回错误而不是假设全是空格！
+        # If extraction still fails, report an error rather than assuming every cell is blank
         if puzzle_str is None:
-            print(f"⚠️  警告：无法从question中提取puzzle，question={question[:100] if question else 'None'}")
-            # 为了不影响统计，认为这是验证失败
+            print(f"[WARN] Could not extract the puzzle from the question, question={question[:100] if question else 'None'}")
+            # Count this as a validation failure so the statistics stay meaningful
             return False, {
                 "correct_cells": 0,
                 "empty_cells": 0,
@@ -749,7 +749,7 @@ class AnswerValidator:
                 "error": "Failed to extract puzzle from question"
             }
 
-        # 处理solution长度问题
+        # Normalize the solution length
         if len(solution_str) < 16:
             solution_str = solution_str + "0" * (16 - len(solution_str))
         elif len(solution_str) > 16:
@@ -764,12 +764,12 @@ class AnswerValidator:
                 "error": f"Ground truth length mismatch: {len(gt_str)}"
             }
 
-        # 找出所有空格位置
+        # Locate every blank cell
         empty_indices = [i for i in range(16) if puzzle_str[i] == "0"]
         empty_cells = len(empty_indices)
 
         if empty_cells == 0:
-            # 没有空格，直接比较整个字符串
+            # No blanks, so compare the whole string
             is_correct = (solution_str == gt_str)
             return is_correct, {
                 "correct_cells": 16 if is_correct else 0,
@@ -778,7 +778,7 @@ class AnswerValidator:
                 "puzzle_extracted": True
             }
 
-        # 计算空格位置的正确数
+        # Count how many blank cells were filled in correctly
         correct_cells = sum(1 for i in empty_indices if solution_str[i] == gt_str[i])
         accuracy = correct_cells / empty_cells
         is_correct = (correct_cells == empty_cells)
@@ -798,17 +798,17 @@ class AnswerValidator:
         **kwargs
     ) -> Tuple[bool, dict]:
         """
-        验证 Countdown 算术表达式
+        Validate a Countdown arithmetic expression.
         
         Args:
-            generated: 生成的表达式字符串
-            ground_truth: (numbers, target) 元组
+            generated: The generated expression string
+            ground_truth: An (numbers, target) tuple
             
         Returns:
             (is_correct, details) where details contains:
-                - evaluated_value: 表达式计算结果
-                - target: 目标值
-                - expression_valid: 表达式是否有效
+                - evaluated_value: Value the expression evaluates to
+                - target: Target value
+                - expression_valid: Whether the expression is valid
         """
         if generated is None or ground_truth is None:
             return False, {
@@ -821,8 +821,8 @@ class AnswerValidator:
         expr = str(generated).strip()
         
         try:
-            # 尝试计算表达式
-            # 注意：这里需要安全的求值，避免任意代码执行
+            # Evaluate the expression; this must stay sandboxed to avoid
+            # arbitrary code execution
             result = AnswerValidator._safe_eval_expression(expr, numbers)
             
             if result is None:
@@ -832,7 +832,7 @@ class AnswerValidator:
                     "expression_valid": False
                 }
             
-            # 检查是否等于目标值（考虑浮点误差）
+            # Compare against the target, allowing for floating-point error
             is_correct = abs(result - target) < 1e-6
             
             return is_correct, {
@@ -857,13 +857,13 @@ class AnswerValidator:
         **kwargs
     ) -> Tuple[bool, dict]:
         """
-        验证 HumanEval 代码（与 lm_eval 框架匹配）
-        使用 HuggingFace evaluate 库的 code_eval 模块（沙箱环境）
+        Validate HumanEval code, matching the lm_eval framework.
+        Runs the code_eval module of the HuggingFace evaluate library (sandboxed).
 
-        重要修复 (2026-03-28):
-        - generated_code 本身已包含完整的函数定义（包括 def 签名和 docstring）
-        - 不应再与 prompt 拼接，否则会导致重复的函数定义
-        - 直接使用 generated_code 即可
+        Important:
+        - generated_code already contains the full function definition,
+          including the def signature and docstring
+        - It must not be concatenated with the prompt, which would duplicate the definition
         """
         if generated is None or ground_truth is None:
             return False, {
@@ -891,8 +891,8 @@ class AnswerValidator:
 
             if CODE_EVAL_AVAILABLE:
                 try:
-                    # generated_code 已包含完整函数定义，无需拼接 prompt
-                    # 使用 sanitize 提取正确的函数（去除 prompt 中的 stub 等）
+                    # generated_code already holds the full definition, so no prompt is prepended.
+                    # sanitize() picks out the right function and drops leftover stubs.
                     try:
                         import sys
                         _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -920,7 +920,7 @@ class AnswerValidator:
                 except Exception as e:
                     eval_logger.warning(f"HF evaluate failed, falling back to subprocess: {e}")
 
-            # 回退：使用 subprocess
+            # Fallback: run it through a subprocess
             return AnswerValidator._validate_code_subprocess(
                 generated_code, test_code, entry_point, prompt=""
             )
@@ -939,8 +939,8 @@ class AnswerValidator:
         **kwargs
     ) -> Tuple[bool, dict]:
         """
-        验证 MBPP 代码（与 lm_eval 框架匹配）
-        使用 HuggingFace evaluate 库的 code_eval 模块（沙箱环境）
+        Validate MBPP code, matching the lm_eval framework.
+        Runs the code_eval module of the HuggingFace evaluate library (sandboxed).
         """
         if generated is None or ground_truth is None:
             return False, {
@@ -955,7 +955,7 @@ class AnswerValidator:
             }
         
         try:
-            # 获取测试用例列表
+            # Collect the list of test cases
             test_list = ground_truth.get("test_list", [])
             
             if not test_list:
@@ -966,13 +966,13 @@ class AnswerValidator:
             
             generated_code = str(generated).strip()
             
-            # 如果使用 HF evaluate 库（推荐）
+            # Preferred path: the HF evaluate library
             if CODE_EVAL_AVAILABLE:
                 try:
-                    # 合并所有测试用例
+                    # Concatenate all test cases
                     test_code = "\n".join(test_list)
                     
-                    # 使用 HF evaluate 的 code_eval 模块
+                    # Run the code_eval module from HF evaluate
                     results = _code_eval_module.compute(
                         references=[test_code],
                         predictions=[[generated_code]],
@@ -991,7 +991,7 @@ class AnswerValidator:
                 except Exception as e:
                     eval_logger.warning(f"HF evaluate failed, falling back to subprocess: {e}")
             
-            # 回退：使用 subprocess
+            # Fallback: run it through a subprocess
             return AnswerValidator._validate_mbpp_subprocess(generated_code, test_list)
             
         except Exception as e:
@@ -1008,25 +1008,25 @@ class AnswerValidator:
         prompt: str
     ) -> Tuple[bool, dict]:
         """
-        使用 subprocess 验证代码（回退方案）
+        Validate code through a subprocess (fallback path).
 
-        重要修复 (2026-03-28):
-        - 如果 generated_code 包含 'def {entry_point}'（完整函数定义），
-          不应再与 prompt 拼接，避免重复函数定义
-        - 改为：直接使用 generated_code，只在需要时补充 imports
+        Important:
+        - When generated_code already contains 'def {entry_point}', i.e. a full
+          definition, it must not be concatenated with the prompt
+        - Instead use generated_code directly and only add the required imports
         """
         import subprocess
         import tempfile
         import os
 
         try:
-            # generated_code 本身已包含完整函数定义时，不需要拼接 prompt
-            # 这与 HumanEval 数据的特点一致：generated_code = "def func(...): ..."
+            # When generated_code already holds a full definition, no prompt is needed.
+            # This matches the HumanEval data: generated_code = "def func(...): ..."
 
-            # 添加必要的导入
+            # Add the imports the tests rely on
             imports = "from typing import *\nimport math\nimport re\nimport sys\n\n"
 
-            # 构建完整代码：generated_code 已包含完整函数体，直接拼接 imports + 测试
+            # Assemble the program: imports + the generated function body + the tests
             full_code = f"{imports}{generated_code}\n\n{test_code}\n\ncheck({entry_point})"
 
             with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
@@ -1071,22 +1071,22 @@ class AnswerValidator:
         generated_code: str,
         test_list: list
     ) -> Tuple[bool, dict]:
-        """使用 subprocess 验证 MBPP 代码（回退方案）"""
+        """Validate MBPP code through a subprocess (fallback path)."""
         import subprocess
         import tempfile
         import os
         
         try:
-            # 合并所有测试用例
+            # Concatenate all test cases
             test_code = "\n".join(test_list)
             
-            # 添加必要的导入
+            # Add the imports the tests rely on
             imports = "from typing import *\nimport math\nimport re\nimport sys\nimport collections\nimport itertools\n\n"
             
-            # 构建完整代码
+            # Assemble the program
             full_code = f"{imports}{generated_code}\n\n{test_code}"
             
-            # 创建临时文件
+            # Write it to a temporary file
             with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
                 f.write(full_code)
                 temp_file = f.name
@@ -1128,8 +1128,8 @@ class AnswerValidator:
     @staticmethod
     def validate_gpqa(generated: Any, ground_truth: Any, **kwargs) -> Tuple[bool, dict]:
         """
-        验证 GPQA 答案（选择题）
-        与 LLaDA 完全对齐
+        Validate a GPQA answer (multiple choice).
+        Fully aligned with LLaDA.
         """
         if generated is None or ground_truth is None:
             return False, {"error": "None value"}
@@ -1147,8 +1147,8 @@ class AnswerValidator:
     @staticmethod
     def validate_arc(generated: Any, ground_truth: Any, **kwargs) -> Tuple[bool, dict]:
         """
-        验证 ARC 答案（选择题）
-        与 LLaDA 完全对齐
+        Validate an ARC answer (multiple choice).
+        Fully aligned with LLaDA.
         """
         if generated is None or ground_truth is None:
             return False, {"error": "None value"}
@@ -1166,45 +1166,45 @@ class AnswerValidator:
     @staticmethod
     def _safe_eval_expression(expr: str, allowed_numbers: list) -> Optional[float]:
         """
-        安全地计算算术表达式
+        Safely evaluate an arithmetic expression.
         
         Args:
-            expr: 表达式字符串
-            allowed_numbers: 允许使用的数字列表
+            expr: The expression string
+            allowed_numbers: List of numbers the expression may use
             
         Returns:
-            计算结果，如果失败返回 None
+            The computed value, or None on failure
         """
         try:
-            # 移除空格
+            # Strip spaces
             expr = expr.replace(' ', '')
             
-            # 验证表达式只包含数字、运算符和括号
+            # Reject anything but digits, operators, and parentheses
             if not re.match(r'^[\d+\-*/()\.]+$', expr):
                 return None
             
-            # 验证表达式中的数字是否与允许的数字匹配
+            # Check that the numbers used match the allowed multiset
             numbers_in_expr = [int(n) for n in re.findall(r'\d+', expr)]
             allowed_numbers_sorted = sorted(allowed_numbers)
             numbers_in_expr_sorted = sorted(numbers_in_expr)
             
             if numbers_in_expr_sorted != allowed_numbers_sorted:
-                # 数字使用不匹配
+                # The numbers used do not match the allowed ones
                 return None
             
-            # 使用 eval（在受控环境中）
-            # 注意：这仍然有安全风险，生产环境应该使用专门的表达式解析器
+            # eval() in a restricted environment. This still carries some risk;
+            # production code should use a dedicated expression parser.
             result = eval(expr, {"__builtins__": None}, {})
             
             return float(result)
             
         except Exception as e:
-            # 不使用warnings，避免过多输出
+            # Deliberately silent: warnings here would be far too noisy
             return None
     
 
 
-# 任务配置映射（添加别名支持）
+# Task configuration map, including task-name aliases
 TASK_CONFIG = {
     "gsm8k": {
         "extractor": AnswerExtractor.extract_gsm8k,
@@ -1214,11 +1214,11 @@ TASK_CONFIG = {
         "extractor": AnswerExtractor.extract_math500,
         "validator": AnswerValidator.validate_math500,
     },
-    "math500": {  # 别名
+    "math500": {  # Alias
         "extractor": AnswerExtractor.extract_math500,
         "validator": AnswerValidator.validate_math500,
     },
-    "minerva_math": {  # 别名
+    "minerva_math": {  # Alias
         "extractor": AnswerExtractor.extract_math500,
         "validator": AnswerValidator.validate_math500,
     },
@@ -1238,11 +1238,11 @@ TASK_CONFIG = {
         "extractor": AnswerExtractor.extract_mbpp,
         "validator": AnswerValidator.validate_mbpp,
     },
-    "gpqa": {  # 🔥 NEW
+    "gpqa": {
         "extractor": AnswerExtractor.extract_gpqa,
         "validator": AnswerValidator.validate_gpqa,
     },
-    "arc": {  # 🔥 NEW
+    "arc": {
         "extractor": AnswerExtractor.extract_arc,
         "validator": AnswerValidator.validate_arc,
     },
@@ -1250,7 +1250,7 @@ TASK_CONFIG = {
 
 
 def get_task_config(task_name: str):
-    """获取任务配置"""
+    """Look up the configuration for a task."""
     task_name = task_name.lower()
     if task_name not in TASK_CONFIG:
         raise ValueError(f"Unknown task: {task_name}. Available: {list(TASK_CONFIG.keys())}")
@@ -1259,31 +1259,31 @@ def get_task_config(task_name: str):
 
 def evaluate_countdown_expression(expr: str, allowed_numbers: list) -> Optional[float]:
     """
-    计算countdown表达式的值（用于BMC的final_answer_match）
+    Evaluate a countdown expression; used by BMC's final_answer_match.
     
     Args:
-        expr: 表达式字符串
-        allowed_numbers: 允许使用的数字列表
+        expr: The expression string
+        allowed_numbers: List of numbers the expression may use
         
     Returns:
-        计算结果，如果失败返回 None
+        The computed value, or None on failure
     """
     if expr is None:
         return None
     
-    # 使用AnswerValidator的_safe_eval_expression方法
+    # Delegate to AnswerValidator._safe_eval_expression
     return AnswerValidator._safe_eval_expression(expr, allowed_numbers)
 
 
 # ============================================================================
-# 函数级别名（供外部调用，如 bmc_core_dream.probe_code）
+# Module-level aliases for external callers such as bmc_core_dream.probe_code
 # ============================================================================
 
 def validate_humaneval(generated: Any, ground_truth: dict, question: str = None, **kwargs) -> Tuple[bool, dict]:
-    """validate_humaneval 的模块级别名"""
+    """Module-level alias for AnswerValidator.validate_humaneval."""
     return AnswerValidator.validate_humaneval(generated, ground_truth, question, **kwargs)
 
 
 def validate_mbpp(generated: Any, ground_truth: dict, question: str = None, **kwargs) -> Tuple[bool, dict]:
-    """validate_mbpp 的模块级别名"""
+    """Module-level alias for AnswerValidator.validate_mbpp."""
     return AnswerValidator.validate_mbpp(generated, ground_truth, question, **kwargs)

@@ -1,6 +1,6 @@
 """
-正确性检测评估脚本
-对比 Model Confidence, Self-Consistency, Self-Evaluation, BMC
+Correctness-detection evaluation script.
+Compares Model Confidence, Self-Consistency, Self-Evaluation and BMC.
 """
 import argparse
 import json
@@ -19,47 +19,47 @@ from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel
 
-# 导入统一的数据集和工具
+# Unified dataset helpers and task utilities
 from datasets_unified import create_dataset
 from task_utils import get_task_config
 
-# 导入 BMC V2
+# BMC V2
 from bmc_core import BMCEstimator
 
-# 🔥 导入修改后的generate（支持返回confidence）
+# Modified generate() that can also return per-token confidences
 from generate_conf import generate
 
 
 def load_optimized_weights(task_name: str = None, weights_path: str = None, verbose: bool = True):
     """
-    🔥 加载最佳权重（复用原始实验的函数）
+    Load the best weights (same helper as in the original experiments).
 
-    优先级：
-    1. 如果指定了weights_path，直接加载
-    2. 否则搜索task_name相关的最佳权重
-    3. 都没有则返回None（使用默认aggressive_scoring）
+    Priority:
+    1. If weights_path is given, load it directly.
+    2. Otherwise search for the best weights matching task_name.
+    3. If nothing is found, return None (fall back to the default aggressive_scoring).
 
     Returns:
-        Dict: 权重字典，如果没找到返回None
+        Dict: the weight dictionary, or None if no weights were found.
     """
     if weights_path:
-        # 指定了权重文件
+        # An explicit weights file was requested
         if not os.path.exists(weights_path):
             if verbose:
-                print(f"⚠️  指定的权重文件不存在: {weights_path}")
+                print(f"[WARN] Specified weights file does not exist: {weights_path}")
             return None
 
         try:
             with open(weights_path, 'r') as f:
                 data = json.load(f)
 
-            # 支持两种格式
+            # Two file layouts are supported
             if 'weights' in data:
                 weights = data['weights']
                 method = data.get('method', 'unknown')
                 metrics = data.get('metrics', {})
             elif 'optimized_results' in data:
-                # 找最佳方法
+                # Pick the best-performing method
                 best_result = max(data['optimized_results'],
                                 key=lambda x: x['metrics'].get('roc_auc', 0))
                 weights = best_result['weights']
@@ -67,18 +67,18 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
                 metrics = best_result['metrics']
             else:
                 if verbose:
-                    print(f"⚠️  权重文件格式不正确: {weights_path}")
+                    print(f"[WARN] Unrecognized weights file format: {weights_path}")
                 return None
 
             if verbose:
                 print(f"\n{'='*60}")
-                print(f"✅ 已加载优化权重")
+                print(f"[OK] Loaded optimized weights")
                 print(f"{'='*60}")
-                print(f"文件: {weights_path}")
-                print(f"方法: {method}")
+                print(f"File: {weights_path}")
+                print(f"Method: {method}")
                 print(f"ROC-AUC: {metrics.get('roc_auc', 0):.4f}")
                 print(f"Score Gap: {metrics.get('score_gap', 0):.4f}")
-                print(f"\n权重配置:")
+                print(f"\nWeight configuration:")
                 for feat, weight in sorted(weights.items(), key=lambda x: -x[1]):
                     print(f"  {feat:25s}: {weight:.4f}")
                 print(f"{'='*60}\n")
@@ -87,18 +87,18 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
 
         except Exception as e:
             if verbose:
-                print(f"⚠️  加载权重文件失败: {e}")
+                print(f"[WARN] Failed to load weights file: {e}")
             return None
 
-    # 自动搜索最佳权重
+    # Automatically search for the best weights
     if task_name:
-        # 搜索优化结果目录
+        # Search the optimization result directories
         patterns = [
             # weights released with this repo (weights/<task>.json), then any newly searched runs
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", f"{task_name}.json"),
             f"bmc_optimization_{task_name}_*/optimization_results.json",
             f"best_weights_{task_name}_*.json",
-            "bmc_optimization_*/optimization_results.json",  # 通用搜索
+            "bmc_optimization_*/optimization_results.json",  # generic fallback search
         ]
 
         best_file = None
@@ -111,13 +111,13 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
                     with open(filepath, 'r') as f:
                         data = json.load(f)
 
-                    # 检查是否匹配任务
+                    # Skip files that belong to a different task
                     file_task = data.get('task', 'unknown')
                     if task_name and file_task != task_name:
                         continue
 
                     if 'optimized_results' in data:
-                        # 找最佳ROC-AUC
+                        # Keep the entry with the highest ROC-AUC
                         for result in data['optimized_results']:
                             if 'weights' not in result:
                                 continue
@@ -130,17 +130,17 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
 
         if best_file:
             if verbose:
-                print(f"🔍 自动发现最佳权重: {best_file}")
+                print(f"[INFO] Auto-detected best weights: {best_file}")
             return load_optimized_weights(task_name, best_file, verbose)
 
     if verbose:
-        print(f"ℹ️  未找到优化权重，将使用默认aggressive_scoring策略")
+        print(f"[INFO] No optimized weights found; falling back to the default aggressive_scoring strategy")
 
     return None
 
 
 def init_seed(seed):
-    """初始化随机种子"""
+    """Initialize all random seeds."""
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
@@ -150,7 +150,7 @@ def init_seed(seed):
 
 
 def setup_ddp():
-    """设置分布式训练"""
+    """Set up distributed processing."""
     dist.init_process_group("nccl")
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
@@ -158,12 +158,12 @@ def setup_ddp():
 
 
 def cleanup_ddp():
-    """清理分布式训练"""
+    """Tear down distributed processing."""
     dist.destroy_process_group()
 
 
 class CustomDistributedSampler(DistributedSampler):
-    """自定义分布式采样器"""
+    """Custom distributed sampler."""
     def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True, seed=0, drop_last=False):
         if num_replicas is None:
             if not dist.is_available():
@@ -208,12 +208,12 @@ def evaluate_all_methods(
     block_length=32,
     t_probe=0.9,
     num_reverse_steps=5,
-    self_consistency_n=10,  # Self-Consistency采样次数
+    self_consistency_n=10,  # number of Self-Consistency samples
 ):
     """
-    使用所有方法评估
-    
-    收集：
+    Evaluate with all scoring methods.
+
+    Collects:
     1. Model Confidence
     2. Self-Consistency Score
     3. Self-Evaluation Score
@@ -243,7 +243,7 @@ def evaluate_all_methods(
             prompt = prompts[sample_idx]
             
             # ============================================
-            # 1️⃣ 生成主答案 + Model Confidence
+            # 1. Generate the main answer and its Model Confidence
             # ============================================
             out, confidence_scores = generate(
                 model,
@@ -255,7 +255,7 @@ def evaluate_all_methods(
                 temperature=temperature,
                 cfg_scale=cfg_scale,
                 remasking="low_confidence",
-                return_confidence=True,  # 🔥 返回置信度
+                return_confidence=True,
             )
             
             main_text = tokenizer.decode(
@@ -263,13 +263,13 @@ def evaluate_all_methods(
                 skip_special_tokens=False
             )
             
-            # 计算答案部分的平均置信度
+            # Average confidence over the answer tokens
             model_confidence = confidence_scores[0].mean().item()
             
-            # 提取答案
+            # Extract the answer
             main_answer = answer_extractor(main_text)
             
-            # 检查正确性
+            # Check correctness
             if task_name in ["sudoku", "countdown", "humaneval", "mbpp"]:
                 is_correct, validation_details = answer_validator(
                     main_answer, gt_answer, question
@@ -279,7 +279,7 @@ def evaluate_all_methods(
                 validation_details = {}
             
             # ============================================
-            # 2️⃣ Self-Consistency (生成N次)
+            # 2. Self-Consistency (generate N times)
             # ============================================
             if dist.get_rank() == 0 and sample_idx == 0:
                 print(f"\n[Sample {batch_idx}] Running Self-Consistency (N={self_consistency_n})...")
@@ -293,7 +293,7 @@ def evaluate_all_methods(
                     steps=steps,
                     gen_length=gen_length,
                     block_length=block_length,
-                    temperature=0.7,  # 🔥 使用非零温度采样
+                    temperature=0.7,  # non-zero temperature so samples differ
                     cfg_scale=cfg_scale,
                     remasking="low_confidence",
                     return_confidence=False,
@@ -307,7 +307,7 @@ def evaluate_all_methods(
                 if sc_answer is not None:
                     sc_answers.append(str(sc_answer))
             
-            # 计算Self-Consistency分数（多数答案的比例）
+            # Self-Consistency score: the fraction held by the majority answer
             if len(sc_answers) > 0:
                 answer_counts = Counter(sc_answers)
                 most_common_answer, most_common_count = answer_counts.most_common(1)[0]
@@ -316,7 +316,7 @@ def evaluate_all_methods(
                 self_consistency_score = 0.0
             
             # ============================================
-            # 3️⃣ Self-Evaluation (让模型评估)
+            # 3. Self-Evaluation (ask the model to judge its own answer)
             # ============================================
             if dist.get_rank() == 0 and sample_idx == 0:
                 print(f"[Sample {batch_idx}] Running Self-Evaluation...")
@@ -357,13 +357,13 @@ Only output the numerical score, nothing else."""
                 skip_special_tokens=True
             ).strip()
             
-            # 提取数值分数
+            # Extract the numeric score
             import re
             score_match = re.search(r'(\d+\.?\d*)', eval_text)
             if score_match:
                 try:
                     self_eval_score = float(score_match.group(1))
-                    # 如果是0-10范围，归一化到0-1
+                    # Normalize a 0-10 style score to 0-1
                     if self_eval_score > 1.0:
                         self_eval_score = self_eval_score / 10.0
                     self_eval_score = np.clip(self_eval_score, 0.0, 1.0)
@@ -373,7 +373,7 @@ Only output the numerical score, nothing else."""
                 self_eval_score = 0.5
             
             # ============================================
-            # 4️⃣ BMC Score
+            # 4. BMC Score
             # ============================================
             if bmc_probe is not None:
                 if dist.get_rank() == 0 and sample_idx == 0:
@@ -388,13 +388,13 @@ Only output the numerical score, nothing else."""
                     )
                     bmc_score = bmc_result['consistency_score']
                 except Exception as e:
-                    print(f"⚠️  BMC failed: {e}")
+                    print(f"[WARN] BMC failed: {e}")
                     bmc_score = 0.0
             else:
-                bmc_score = -1.0  # BMC被跳过
+                bmc_score = -1.0  # BMC was skipped
             
             # ============================================
-            # 📊 汇总结果
+            # Collect the results
             # ============================================
             result = {
                 "question": question,
@@ -404,26 +404,26 @@ Only output the numerical score, nothing else."""
                 "ground_truth": str(gt_answer),
                 "is_correct": int(is_correct),
                 
-                # 四种方法的分数
+                # Scores from the four methods
                 "model_confidence": float(model_confidence),
                 "self_consistency_score": float(self_consistency_score),
                 "self_eval_score": float(self_eval_score),
                 "bmc_score": float(bmc_score),
                 
-                # Self-Consistency详情
+                # Self-Consistency details
                 "sc_answers": sc_answers,
                 "sc_answer_counts": dict(Counter(sc_answers)) if sc_answers else {},
                 
-                # Self-Evaluation详情
+                # Self-Evaluation details
                 "self_eval_text": eval_text,
                 
-                # 验证详情
+                # Validation details
                 "validation_details": validation_details if validation_details else {},
             }
             
             all_results.append(result)
             
-            # 打印示例
+            # Print a sample
             if dist.get_rank() == 0 and sample_idx == 0:
                 print(f"\n{'='*80}")
                 print(f"Question: {question[:100]}...")
@@ -431,20 +431,20 @@ Only output the numerical score, nothing else."""
                 print(f"Ground Truth: {str(gt_answer)[:100]}...")
                 print(f"Is Correct: {is_correct}")
                 print("-" * 80)
-                print(f"📊 Scores:")
+                print(f"Scores:")
                 print(f"  Model Confidence:     {model_confidence:.4f}")
                 print(f"  Self-Consistency:     {self_consistency_score:.4f}")
                 print(f"  Self-Evaluation:      {self_eval_score:.4f}")
                 print(f"  BMC Score:            {bmc_score:.4f}")
                 print(f"{'='*80}\n")
     
-    # 计算准确率
+    # Compute accuracy
     num_correct = sum(r['is_correct'] for r in all_results)
     accuracy = num_correct / len(all_results) if all_results else 0.0
     
     if dist.get_rank() == 0:
         print(f"\n{'='*80}")
-        print(f"📊 Overall Statistics:")
+        print(f"Overall Statistics:")
         print(f"  Total Samples: {len(all_results)}")
         print(f"  Correct: {num_correct}")
         print(f"  Accuracy: {accuracy:.2%}")
@@ -464,41 +464,41 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--batch_size", type=int, default=1)  # 建议用1，因为要多次采样
+    parser.add_argument("--batch_size", type=int, default=1)  # 1 is recommended because each sample is generated many times
     parser.add_argument("--dataset", type=str, choices=["gsm8k", "math", "aime", "olympic", "gpqa", "logiqa", "arc"], default="gsm8k")
     parser.add_argument("--gen_length", type=int, default=128)
     parser.add_argument("--block_length", type=int, default=32)
     parser.add_argument("--diffusion_steps", type=int, default=64)
     parser.add_argument("--output_dir", type=str, default="results_correctness_detection/")
     
-    # BMC 参数
+    # BMC parameters
     parser.add_argument("--t_probe", type=float, default=0.9)
     parser.add_argument("--num_reverse_steps", type=int, default=16,
-                       help="BMC反向去噪步数")
+                       help="Number of BMC reverse denoising steps")
     parser.add_argument("--num_samples", type=int, default=4,
-                       help="BMC多次采样次数（减少随机性）")
+                       help="Number of BMC samples (averaged to reduce variance)")
     parser.add_argument("--semantic_model_path", type=str, default=None)
-    parser.add_argument("--skip_bmc", action="store_true", help="跳过BMC评估")
+    parser.add_argument("--skip_bmc", action="store_true", help="Skip BMC evaluation")
     
-    # 🔥 NEW: 优化权重支持
+    # Optimized weights
     parser.add_argument("--optimized_weights_path", type=str, default=None,
-                       help="优化权重文件路径（可选，自动搜索）")
+                       help="Path to the optimized weights file (optional; auto-discovered otherwise)")
     parser.add_argument("--force_aggressive", action="store_true",
-                       help="强制使用aggressive_scoring，忽略优化权重")
+                       help="Force aggressive_scoring and ignore any optimized weights")
     parser.add_argument("--aggressive_scoring", action="store_true",
-                       help="使用激进评分策略（如果没有优化权重）")
+                       help="Use the aggressive scoring strategy when no optimized weights are available")
     
-    # Self-Consistency 参数
+    # Self-Consistency parameters
     parser.add_argument("--self_consistency_n", type=int, default=10,
-                       help="Self-Consistency采样次数")
+                       help="Number of Self-Consistency samples")
     
-    # 采样
+    # Sampling
     parser.add_argument("--subsample", type=int, default=100,
-                       help="评估样本数（-1表示全部）")
+                       help="Number of samples to evaluate (-1 means all)")
     
     args = parser.parse_args()
     
-    # 加载模型
+    # Load the model
     if dist.get_rank() == 0:
         print(f"\n{'='*80}")
         print("Loading LLaDA model...")
@@ -516,15 +516,15 @@ if __name__ == "__main__":
         trust_remote_code=True
     )
     
-    # 初始化 BMC 探针
+    # Initialize the BMC probe
     bmc_probe = None
     if not args.skip_bmc:
         if args.semantic_model_path is None:
-            print("❌ ERROR: --semantic_model_path is required when BMC is enabled!")
+            print("[ERROR] --semantic_model_path is required when BMC is enabled!")
             cleanup_ddp()
             exit(1)
         
-        # 🔥 NEW: 加载优化权重
+        # Load optimized weights
         optimized_weights = None
         if not args.force_aggressive:
             if dist.get_rank() == 0:
@@ -534,9 +534,9 @@ if __name__ == "__main__":
                     verbose=True
                 )
 
-            # 广播权重到所有进程
+            # Broadcast the weights to every process
             if dist.get_world_size() > 1:
-                # 将权重转为可广播的格式
+                # Wrap the weights in a list so they can be broadcast
                 if optimized_weights is not None:
                     weights_list = [optimized_weights]
                 else:
@@ -546,16 +546,16 @@ if __name__ == "__main__":
                 optimized_weights = weights_list[0]
         else:
             if dist.get_rank() == 0:
-                print("⚠️  使用 --force_aggressive，忽略优化权重")
+                print("[WARN] --force_aggressive is set; ignoring optimized weights")
         
         if dist.get_rank() == 0:
             print("\n" + "="*80)
             print("Initializing BMC Probe...")
             print(f"Semantic model: {args.semantic_model_path}")
             if optimized_weights:
-                print(f"Using optimized weights: ✅")
+                print(f"Using optimized weights: yes")
             elif args.aggressive_scoring:
-                print(f"Using aggressive scoring: ✅")
+                print(f"Using aggressive scoring: yes")
             else:
                 print(f"Using default scoring")
             print("="*80)
@@ -569,19 +569,19 @@ if __name__ == "__main__":
                 semantic_model_path=args.semantic_model_path,
                 task_name=args.dataset,
                 task_config=task_config,
-                num_samples=args.num_samples,  # 🔥 传入num_samples
-                aggressive_scoring=args.aggressive_scoring,  # 🔥 传入aggressive_scoring
-                optimized_weights=optimized_weights,  # 🔥 传入优化权重
+                num_samples=args.num_samples,
+                aggressive_scoring=args.aggressive_scoring,
+                optimized_weights=optimized_weights,
             )
             if dist.get_rank() == 0:
-                print(f"✓ BMC initialized (num_samples={args.num_samples})")
+                print(f"[OK] BMC initialized (num_samples={args.num_samples})")
                 print("="*80 + "\n")
         except Exception as e:
             if dist.get_rank() == 0:
-                print(f"❌ BMC initialization failed: {e}")
+                print(f"[ERROR] BMC initialization failed: {e}")
             bmc_probe = None
     
-    # 加载数据集
+    # Load the dataset
     dataset = create_dataset(
         args.dataset,
         tokenizer=tokenizer,
@@ -597,7 +597,7 @@ if __name__ == "__main__":
         collate_fn=dataset.collate_fn,
     )
     
-    # 运行评估
+    # Run the evaluation
     metrics = evaluate_all_methods(
         model,
         tokenizer,
@@ -612,10 +612,10 @@ if __name__ == "__main__":
         self_consistency_n=args.self_consistency_n,
     )
     
-    # 保存结果
+    # Save the results
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # 🔥 FIX: 在cleanup之前保存rank信息
+    # Cache the rank before cleanup, since the process group is destroyed afterwards
     current_rank = dist.get_rank()
     is_main_process = (current_rank == 0)
     
@@ -648,10 +648,10 @@ if __name__ == "__main__":
             }
         }, f, indent=2)
     
-    # 🔥 FIX: 在cleanup之前打印（避免访问已销毁的进程组）
+    # Print before cleanup so we never touch a destroyed process group
     if is_main_process:
         print(f"\n{'='*80}")
-        print("✅ Evaluation completed!")
+        print("[OK] Evaluation completed!")
         print(f"Results saved to: {args.output_dir}")
         print(f"{'='*80}\n")
     

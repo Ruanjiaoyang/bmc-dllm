@@ -1,6 +1,6 @@
 """
-Dream模型的正确性检测评估脚本
-对比 Model Confidence, Self-Consistency, Self-Evaluation, BMC
+Correctness detection evaluation script for the Dream model.
+Compares Model Confidence, Self-Consistency, Self-Evaluation and BMC.
 """
 import argparse
 import json
@@ -21,10 +21,10 @@ from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel
 
-# Dream的任务管理器（已不再使用，改用独立函数）
+# Dream task manager (no longer used; standalone functions are used instead)
 # from lm_eval.tasks import TaskManager
 
-# Dream的BMC实现
+# Dream BMC implementation
 from lm_eval.bmc.bmc_core_dream import BMCEstimatorDream
 from eval_bmc_dream import (
     load_optimized_weights,
@@ -39,7 +39,7 @@ from eval_bmc_dream import (
 
 
 def init_seed(seed):
-    """初始化随机种子"""
+    """Initialize the random seeds."""
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
@@ -49,7 +49,7 @@ def init_seed(seed):
 
 
 def setup_ddp():
-    """设置分布式训练"""
+    """Set up distributed training."""
     dist.init_process_group("nccl")
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
@@ -57,12 +57,12 @@ def setup_ddp():
 
 
 def cleanup_ddp():
-    """清理分布式训练"""
+    """Tear down distributed training."""
     dist.destroy_process_group()
 
 
 class CustomDistributedSampler(DistributedSampler):
-    """自定义分布式采样器"""
+    """Custom distributed sampler."""
     def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True, seed=0, drop_last=False):
         if num_replicas is None:
             if not dist.is_available():
@@ -104,48 +104,48 @@ def generate_with_confidence(
     return_confidence=False,
 ):
     """
-    使用Dream模型生成，支持返回置信度
+    Generate with the Dream model, optionally returning the confidence.
     
     Args:
-        diffusion_steps: Dream扩散模型的步数
-        return_confidence: 如果为True，返回(output_ids, avg_confidence)
+        diffusion_steps: number of diffusion steps of the Dream model
+        return_confidence: if True, return (output_ids, avg_confidence)
     
     Returns:
-        output_ids: 生成的token ids
-        avg_confidence: 平均置信度（如果return_confidence=True），否则为None
+        output_ids: generated token ids
+        avg_confidence: mean confidence if return_confidence=True, otherwise None
     """
     with torch.no_grad():
-        # Dream模型使用diffusion_generate方法
+        # The Dream model generates through diffusion_generate
         outputs = model.diffusion_generate(
             input_ids,
             max_new_tokens=max_new_tokens,
             steps=diffusion_steps,
             temperature=temperature,
             top_p=0.9,
-            alg="entropy",  # entropy算法会计算置信度
+            alg="entropy",  # the entropy algorithm computes confidences
             return_dict_in_generate=True,
         )
         
         output_ids = outputs.sequences
         
         if return_confidence:
-            # Dream模型不直接返回scores，但我们可以通过重新计算logits来估计置信度
-            # 方法：对生成的序列重新计算logits，然后计算每个token的概率
+            # The Dream model does not return scores directly, so the confidence is
+            # estimated by recomputing the logits of the generated sequence
             batch_size = output_ids.size(0)
             input_len = input_ids.size(1)
             generated_len = output_ids.size(1) - input_len
             
             if generated_len > 0:
-                # 重新计算生成部分的logits
+                # Recompute the logits of the generated part
                 with torch.no_grad():
                     model_outputs = model(output_ids)
                     logits = model_outputs.logits
                 
-                # 只关注生成的部分
+                # Keep only the generated part
                 generated_logits = logits[:, input_len-1:-1, :]  # [batch, gen_len, vocab]
                 generated_tokens = output_ids[:, input_len:]  # [batch, gen_len]
                 
-                # 计算每个生成token的概率
+                # Probability of each generated token
                 probs = F.softmax(generated_logits, dim=-1)
                 token_probs = torch.gather(
                     probs, 
@@ -153,11 +153,11 @@ def generate_with_confidence(
                     index=generated_tokens.unsqueeze(-1)
                 ).squeeze(-1)  # [batch, gen_len]
                 
-                # 计算平均置信度（忽略padding）
+                # Mean confidence, ignoring padding
                 mask = (generated_tokens != tokenizer.pad_token_id) & (generated_tokens != tokenizer.eos_token_id)
                 if mask.any():
                     avg_confidence = (token_probs * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
-                    # 先转换为float32再转numpy（BFloat16不被numpy直接支持）
+                    # Cast to float32 first: numpy does not support BFloat16
                     avg_confidence = avg_confidence.float().cpu().numpy()
                 else:
                     avg_confidence = np.ones(batch_size) * 0.5
@@ -166,7 +166,7 @@ def generate_with_confidence(
             
             return output_ids, avg_confidence
         else:
-            # 不需要置信度时返回None
+            # No confidence requested, return None
             return output_ids, None
 
 
@@ -183,9 +183,9 @@ def evaluate_all_methods(
     self_consistency_n=10,
 ):
     """
-    使用所有方法评估
+    Evaluate with every method.
     
-    收集：
+    Collects:
     1. Model Confidence
     2. Self-Consistency Score
     3. Self-Evaluation Score
@@ -197,22 +197,22 @@ def evaluate_all_methods(
     device = model.device
     
     for batch_idx, batch in enumerate(tqdm(dataloader, disable=(dist.get_rank() != 0))):
-        questions = batch["questions"]  # 复数形式
-        gt_answers = batch["answers"]  # 复数形式
-        prompts = batch["prompts"]  # 从batch中获取预构建的prompts
+        questions = batch["questions"]
+        gt_answers = batch["answers"]
+        prompts = batch["prompts"]  # prompts prebuilt in collate_fn
         batch_size = len(questions)
         
         for sample_idx in range(batch_size):
             question = questions[sample_idx]
             gt_answer = gt_answers[sample_idx]
-            prompt = prompts[sample_idx]  # 使用预构建的prompt
+            prompt = prompts[sample_idx]  # use the prebuilt prompt
             
-            # 构建prompt (已在collate_fn中完成)
+            # The prompt is already built in collate_fn
             # prompt = task_manager.build_prompt(question, task_name)
             input_ids = tokenizer.encode(prompt, return_tensors='pt').to(device)
             
             # ============================================
-            # 1️⃣ 生成主答案 + Model Confidence
+            # 1. Generate the main answer + model confidence
             # ============================================
             output_ids, confidence_scores = generate_with_confidence(
                 model,
@@ -229,17 +229,17 @@ def evaluate_all_methods(
                 skip_special_tokens=True
             )
             
-            # 模型置信度
+            # Model confidence
             model_confidence = float(confidence_scores[0])
             
-            # 提取答案
+            # Extract the answer
             main_answer = extract_answer(main_text, task_name)
             
-            # 检查正确性
+            # Check correctness
             is_correct = validate_answer(main_answer, gt_answer, task_name, question)
             
             # ============================================
-            # 2️⃣ Self-Consistency (生成N次)
+            # 2. Self-Consistency (N generations)
             # ============================================
             if dist.get_rank() == 0 and sample_idx == 0:
                 print(f"\n[Sample {batch_idx}] Running Self-Consistency (N={self_consistency_n})...")
@@ -252,7 +252,7 @@ def evaluate_all_methods(
                     input_ids,
                     max_new_tokens=max_new_tokens,
                     diffusion_steps=diffusion_steps,
-                    temperature=0.7,  # 使用非零温度采样
+                    temperature=0.7,  # sample with a non-zero temperature
                     return_confidence=False,
                 )
                 
@@ -264,7 +264,7 @@ def evaluate_all_methods(
                 if sc_answer is not None:
                     sc_answers.append(str(sc_answer))
             
-            # 计算Self-Consistency分数（多数答案的比例）
+            # Self-Consistency score: fraction of the majority answer
             if len(sc_answers) > 0:
                 answer_counts = Counter(sc_answers)
                 most_common_answer, most_common_count = answer_counts.most_common(1)[0]
@@ -273,12 +273,12 @@ def evaluate_all_methods(
                 self_consistency_score = 0.0
             
             # ============================================
-            # 3️⃣ Self-Evaluation (让模型评估)
+            # 3. Self-Evaluation (ask the model to judge itself)
             # ============================================
             if dist.get_rank() == 0 and sample_idx == 0:
                 print(f"[Sample {batch_idx}] Running Self-Evaluation...")
             
-            # Self-Evaluation提示词（改进版：更明确的指令）
+            # Self-Evaluation prompt, with explicit output instructions
             eval_prompt = f"""Question: {question}
 
 Your Answer: {main_text}
@@ -297,7 +297,7 @@ Your confidence score:"""
                 model,
                 tokenizer,
                 eval_input_ids,
-                max_new_tokens=64,  # 🔥 FIX: 增加到64（与LLaDA一致）
+                max_new_tokens=64,  # matches the LLaDA setup
                 diffusion_steps=diffusion_steps,
                 temperature=0.0,
                 return_confidence=False,
@@ -308,32 +308,32 @@ Your confidence score:"""
                 skip_special_tokens=True
             ).strip()
             
-            # 提取数值分数（与LLaDA-bmc对齐）
-            # 尝试匹配: "0.85", "0.9", "1.0", etc.
+            # Extract the numeric score (aligned with LLaDA-bmc)
+            # Matches values such as "0.85", "0.9", "1.0", etc.
             score_match = re.search(r'(\d+\.?\d*)', eval_text)
             if score_match:
                 try:
                     self_eval_score = float(score_match.group(1))
-                    # 如果是0-10范围，归一化到0-1
+                    # Normalize a 0-10 score to the 0-1 range
                     if self_eval_score > 1.0:
                         self_eval_score = self_eval_score / 10.0
                     self_eval_score = np.clip(self_eval_score, 0.0, 1.0)
                     
-                    # 调试信息
+                    # Debug output
                     if dist.get_rank() == 0 and sample_idx == 0:
                         print(f"  Self-Eval raw output: '{eval_text}'")
                         print(f"  Self-Eval parsed score: {self_eval_score:.4f}")
                 except:
                     self_eval_score = 0.5
                     if dist.get_rank() == 0 and sample_idx == 0:
-                        print(f"  ⚠️  Self-Eval parsing failed: '{eval_text}'")
+                        print(f"  [WARN] Self-Eval parsing failed: '{eval_text}'")
             else:
                 self_eval_score = 0.5
                 if dist.get_rank() == 0 and sample_idx == 0:
-                    print(f"  ⚠️  Self-Eval no number found: '{eval_text}'")
+                    print(f"  [WARN] Self-Eval no number found: '{eval_text}'")
             
             # ============================================
-            # 4️⃣ BMC Score
+            # 4. BMC Score
             # ============================================
             if bmc_probe is not None:
                 if dist.get_rank() == 0 and sample_idx == 0:
@@ -348,13 +348,13 @@ Your confidence score:"""
                     )
                     bmc_score = bmc_result['consistency_score']
                 except Exception as e:
-                    print(f"⚠️  BMC failed: {e}")
+                    print(f"[WARN] BMC failed: {e}")
                     bmc_score = 0.0
             else:
-                bmc_score = -1.0  # BMC被跳过
+                bmc_score = -1.0  # BMC was skipped
             
             # ============================================
-            # 📊 汇总结果
+            # Collect the results
             # ============================================
             result = {
                 "question": question,
@@ -364,23 +364,23 @@ Your confidence score:"""
                 "ground_truth": str(gt_answer),
                 "is_correct": int(is_correct),
                 
-                # 四种方法的分数
+                # Scores of the four methods
                 "model_confidence": float(model_confidence),
                 "self_consistency_score": float(self_consistency_score),
                 "self_eval_score": float(self_eval_score),
                 "bmc_score": float(bmc_score),
                 
-                # Self-Consistency详情
+                # Self-Consistency details
                 "sc_answers": sc_answers,
                 "sc_answer_counts": dict(Counter(sc_answers)) if sc_answers else {},
                 
-                # Self-Evaluation详情
+                # Self-Evaluation details
                 "self_eval_text": eval_text,
             }
             
             all_results.append(result)
             
-            # 打印示例
+            # Print a sample
             if dist.get_rank() == 0 and sample_idx == 0:
                 print(f"\n{'='*80}")
                 print(f"Question: {question[:100]}...")
@@ -388,20 +388,20 @@ Your confidence score:"""
                 print(f"Ground Truth: {str(gt_answer)[:100]}...")
                 print(f"Is Correct: {is_correct}")
                 print("-" * 80)
-                print(f"📊 Scores:")
+                print(f"Scores:")
                 print(f"  Model Confidence:     {model_confidence:.4f}")
                 print(f"  Self-Consistency:     {self_consistency_score:.4f}")
                 print(f"  Self-Evaluation:      {self_eval_score:.4f}")
                 print(f"  BMC Score:            {bmc_score:.4f}")
                 print(f"{'='*80}\n")
     
-    # 计算准确率
+    # Compute the accuracy
     num_correct = sum(r['is_correct'] for r in all_results)
     accuracy = num_correct / len(all_results) if all_results else 0.0
     
     if dist.get_rank() == 0:
         print(f"\n{'='*80}")
-        print(f"📊 Overall Statistics:")
+        print(f"Overall Statistics:")
         print(f"  Total Samples: {len(all_results)}")
         print(f"  Correct: {num_correct}")
         print(f"  Accuracy: {accuracy:.2%}")
@@ -425,33 +425,33 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, choices=["gsm8k", "math", "gpqa", "arc"], default="gsm8k")
     parser.add_argument("--max_new_tokens", type=int, default=128)
     parser.add_argument("--diffusion_steps", type=int, default=64,
-                       help="Dream扩散模型的步数")
+                       help="Number of diffusion steps of the Dream model")
     parser.add_argument("--output_dir", type=str, default="results_correctness_detection_dream/")
     
-    # BMC 参数
+    # BMC parameters
     parser.add_argument("--t_probe", type=float, default=0.9)
     parser.add_argument("--num_reverse_steps", type=int, default=16)
     parser.add_argument("--num_samples", type=int, default=4,
-                       help="BMC多次采样次数（减少随机性）")
+                       help="Number of BMC samples (reduces variance)")
     parser.add_argument("--semantic_model_path", type=str, default=None)
-    parser.add_argument("--skip_bmc", action="store_true", help="跳过BMC评估")
+    parser.add_argument("--skip_bmc", action="store_true", help="Skip the BMC evaluation")
     parser.add_argument("--adaptive_t", action="store_true", default=True,
-                       help="使用自适应t_probe")
+                       help="Use an adaptive t_probe")
     parser.add_argument("--aggressive_scoring", action="store_true", default=True,
-                       help="使用激进评分策略")
+                       help="Use the aggressive scoring strategy")
     parser.add_argument("--optimized_weights_path", type=str, default=None,
-                       help="优化权重文件路径")
+                       help="Path to the optimized weights file")
     
-    # Self-Consistency 参数
+    # Self-Consistency parameters
     parser.add_argument("--self_consistency_n", type=int, default=10)
     
-    # 采样
+    # Sampling
     parser.add_argument("--subsample", type=int, default=100,
-                       help="评估样本数（-1表示全部）")
+                       help="Number of samples to evaluate (-1 for all)")
     
     args = parser.parse_args()
     
-    # 加载模型
+    # Load the model
     if dist.get_rank() == 0:
         print(f"\n{'='*80}")
         print("Loading Dream model...")
@@ -472,25 +472,25 @@ if __name__ == "__main__":
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    # 初始化任务管理器（已不再使用）
+    # Task manager initialization (no longer used)
     # task_manager = TaskManager()
     
-    # 🔥 加载优化权重
-    # 如果指定了weights_path，使用指定的文件
-    # 如果没有指定，自动搜索任务对应的最佳权重
+    # Load the optimized weights
+    # If weights_path is given, that file is used
+    # Otherwise the best weights for the task are searched automatically
     optimized_weights = None
     if not args.skip_bmc:
         optimized_weights = load_optimized_weights(
             task_name=args.dataset,
-            weights_path=args.optimized_weights_path,  # 可以是None，会自动搜索
+            weights_path=args.optimized_weights_path,  # may be None, then weights are searched
             verbose=(dist.get_rank() == 0)
         )
     
-    # 初始化 BMC 探针
+    # Initialize the BMC probe
     bmc_probe = None
     if not args.skip_bmc:
         if args.semantic_model_path is None:
-            print("❌ ERROR: --semantic_model_path is required when BMC is enabled!")
+            print("[ERROR] --semantic_model_path is required when BMC is enabled!")
             cleanup_ddp()
             exit(1)
         
@@ -502,11 +502,11 @@ if __name__ == "__main__":
             print(f"Adaptive t: {args.adaptive_t}")
             print(f"Aggressive scoring: {args.aggressive_scoring}")
             if optimized_weights:
-                print("🔥 Using optimized weights (overrides aggressive_scoring)")
+                print("Using optimized weights (overrides aggressive_scoring)")
             print("="*80)
         
         try:
-            # 🔥 获取任务对应的system prompt（与基础BMC实验对齐）
+            # System prompt per task (aligned with the base BMC experiments)
             task_system_prompts = {
                 "gsm8k": """You are a math expert. You will be given a question to solve. Solve it step by step. Wrap the final answer in a \\boxed{}. 
 Respond in the following format:
@@ -558,7 +558,7 @@ Where X is one of the available options (A, B, C, D, or E)""",
             
             task_system_prompt = task_system_prompts.get(args.dataset, "")
             
-            # 🔥 获取任务配置（与基础BMC实验对齐）
+            # Task configuration (aligned with the base BMC experiments)
             from lm_eval.bmc.task_utils import get_task_config
             task_config = get_task_config(args.dataset)
             
@@ -570,22 +570,22 @@ Where X is one of the available options (A, B, C, D, or E)""",
                 adaptive_t=args.adaptive_t,
                 num_samples=args.num_samples,
                 aggressive_scoring=(not optimized_weights and args.aggressive_scoring),
-                diffusion_steps=args.diffusion_steps,  # 🔥 NEW: 添加diffusion_steps
+                diffusion_steps=args.diffusion_steps,
                 optimized_weights=optimized_weights,
-                task_name=args.dataset,  # 🔥 NEW: 添加task_name
-                task_config=task_config,  # 🔥 NEW: 添加task_config
-                system_prompt=task_system_prompt,  # 🔥 NEW: 添加system_prompt
-                use_chat_template=True,  # 🔥 NEW: 添加use_chat_template
+                task_name=args.dataset,
+                task_config=task_config,
+                system_prompt=task_system_prompt,
+                use_chat_template=True,
             )
             if dist.get_rank() == 0:
-                print(f"✓ BMC initialized (num_samples={args.num_samples})")
+                print(f"[OK] BMC initialized (num_samples={args.num_samples})")
                 print("="*80 + "\n")
         except Exception as e:
             if dist.get_rank() == 0:
-                print(f"❌ BMC initialization failed: {e}")
+                print(f"[ERROR] BMC initialization failed: {e}")
             bmc_probe = None
     
-    # 加载数据集
+    # Load the dataset
     if args.dataset == "gsm8k":
         dataset = GSM8KDataset(
             tokenizer=tokenizer,
@@ -628,7 +628,7 @@ Where X is one of the available options (A, B, C, D, or E)""",
         collate_fn=dataset.collate_fn,
     )
     
-    # 运行评估
+    # Run the evaluation
     metrics = evaluate_all_methods(
         model,
         tokenizer,
@@ -642,7 +642,7 @@ Where X is one of the available options (A, B, C, D, or E)""",
         self_consistency_n=args.self_consistency_n,
     )
     
-    # 保存结果
+    # Save the results
     os.makedirs(args.output_dir, exist_ok=True)
     
     current_rank = dist.get_rank()
@@ -676,7 +676,7 @@ Where X is one of the available options (A, B, C, D, or E)""",
     
     if is_main_process:
         print(f"\n{'='*80}")
-        print("✅ Evaluation completed!")
+        print("[OK] Evaluation completed!")
         print(f"Results saved to: {args.output_dir}")
         print(f"{'='*80}\n")
     

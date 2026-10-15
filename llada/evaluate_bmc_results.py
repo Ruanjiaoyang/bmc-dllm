@@ -1,6 +1,6 @@
 """
-独立评估已生成的BMC结果
-计算 AUROC, AUPR, ECE, Brier Score
+Standalone evaluation of previously generated BMC results.
+Computes AUROC, AUPR, ECE and Brier score.
 """
 import json
 import glob
@@ -13,7 +13,7 @@ from sklearn.metrics import (
 
 
 def compute_ece(y_true, y_pred, n_bins=10):
-    """计算 Expected Calibration Error"""
+    """Compute the Expected Calibration Error."""
     y_true = np.array(y_true)
     y_pred = np.array(y_pred)
     
@@ -35,13 +35,13 @@ def compute_ece(y_true, y_pred, n_bins=10):
 
 
 def load_bmc_results(result_dir, dataset_name):
-    """加载BMC结果文件"""
-    # 匹配文件名模式
+    """Load BMC result files."""
+    # Match the result filename pattern
     pattern = f"{result_dir}/{dataset_name}_*_bmc_v2_*_generations.json"
     files = glob.glob(pattern)
     
     if not files:
-        print(f"⚠️  No files found for pattern: {pattern}")
+        print(f"[WARN] No files found for pattern: {pattern}")
         return None
     
     all_results = []
@@ -52,24 +52,24 @@ def load_bmc_results(result_dir, dataset_name):
                 data = json.load(f)
                 all_results.extend(data['generations'])
         except Exception as e:
-            print(f"⚠️  Error loading {filepath}: {e}")
+            print(f"[WARN] Error loading {filepath}: {e}")
             continue
     
-    print(f"✓ Loaded {len(all_results)} samples from {len(files)} files")
+    print(f"[OK] Loaded {len(all_results)} samples from {len(files)} files")
     return all_results
 
 
 def evaluate_bmc(results, dataset_name):
-    """评估BMC性能"""
+    """Evaluate BMC performance."""
     if not results:
         return None
     
-    # 提取数据
+    # Extract scores and labels
     bmc_scores = []
     labels = []
     
     for item in results:
-        # 获取BMC分数
+        # Fetch the BMC score
         if 'bmc_scores' in item and isinstance(item['bmc_scores'], dict):
             score = item['bmc_scores'].get('consistency_score', -1)
         elif 'bmc_score' in item:
@@ -77,39 +77,39 @@ def evaluate_bmc(results, dataset_name):
         else:
             continue
         
-        # 跳过无效分数
+        # Skip invalid scores
         if score < 0 or np.isnan(score) or np.isinf(score):
             continue
         
-        # 获取正确性标签
+        # Fetch the correctness label
         is_correct = item.get('is_correct', 0)
         
         bmc_scores.append(score)
         labels.append(int(is_correct))
     
     if len(bmc_scores) == 0:
-        print(f"❌ No valid BMC scores found!")
+        print(f"[ERROR] No valid BMC scores found!")
         return None
     
     bmc_scores = np.array(bmc_scores)
     labels = np.array(labels)
     
-    # 检查是否只有一个类别
+    # Metrics are undefined when only one class is present
     if len(np.unique(labels)) < 2:
-        print(f"⚠️  Only one class in labels, cannot compute metrics")
+        print(f"[WARN] Only one class in labels, cannot compute metrics")
         return None
     
-    # 计算指标
+    # Compute metrics
     try:
         auroc = roc_auc_score(labels, bmc_scores)
         aupr = average_precision_score(labels, bmc_scores)
         ece = compute_ece(labels, bmc_scores)
         brier = brier_score_loss(labels, bmc_scores)
     except Exception as e:
-        print(f"❌ Error computing metrics: {e}")
+        print(f"[ERROR] Error computing metrics: {e}")
         return None
     
-    # 统计信息
+    # Summary statistics
     correct_scores = bmc_scores[labels == 1]
     wrong_scores = bmc_scores[labels == 0]
     
@@ -120,13 +120,13 @@ def evaluate_bmc(results, dataset_name):
         'num_wrong': int((1 - labels).sum()),
         'accuracy': float(labels.mean()),
         
-        # 主要指标
+        # Primary metrics
         'auroc': float(auroc),
         'aupr': float(aupr),
         'ece': float(ece),
         'brier': float(brier),
         
-        # BMC分数统计
+        # BMC score statistics
         'mean_score_correct': float(correct_scores.mean()) if len(correct_scores) > 0 else 0.0,
         'std_score_correct': float(correct_scores.std()) if len(correct_scores) > 0 else 0.0,
         'mean_score_wrong': float(wrong_scores.mean()) if len(wrong_scores) > 0 else 0.0,
@@ -138,16 +138,16 @@ def evaluate_bmc(results, dataset_name):
 
 
 def print_results(gsm8k_metrics, math_metrics):
-    """打印结果表格"""
+    """Print the result table."""
     print(f"\n{'='*80}")
-    print("📊 BMC Correctness Detection Performance")
+    print("BMC Correctness Detection Performance")
     print(f"{'='*80}\n")
     
-    # 表头
+    # Table header
     print(f"{'Metric':<20} {'GSM8K':<15} {'MATH':<15} {'Change':<15}")
     print("-" * 80)
     
-    # 样本信息
+    # Sample counts
     if gsm8k_metrics:
         print(f"{'Total Samples':<20} {gsm8k_metrics['total_samples']:<15} ", end="")
         if math_metrics:
@@ -166,7 +166,7 @@ def print_results(gsm8k_metrics, math_metrics):
     
     print()
     
-    # 主要指标
+    # Primary metrics
     metrics_to_show = [
         ('AUROC ↑', 'auroc', True),
         ('AUPR ↑', 'aupr', True),
@@ -184,11 +184,11 @@ def print_results(gsm8k_metrics, math_metrics):
                 change = math_val - gsm_val
                 print(f"{math_val:<15.4f} ", end="")
                 
-                # 计算变化（考虑方向）
+                # Interpret the change according to the metric's direction
                 if higher_better:
-                    symbol = "✅" if change >= 0 else "❌"
+                    symbol = "(better)" if change >= 0 else "(worse)"
                 else:
-                    symbol = "✅" if change <= 0 else "❌"
+                    symbol = "(better)" if change <= 0 else "(worse)"
                 
                 print(f"{change:+.4f} {symbol}")
             else:
@@ -198,7 +198,7 @@ def print_results(gsm8k_metrics, math_metrics):
     
     print()
     
-    # BMC分数统计
+    # BMC score statistics
     print(f"{'='*80}")
     print("BMC Score Distribution")
     print(f"{'='*80}\n")
@@ -209,18 +209,18 @@ def print_results(gsm8k_metrics, math_metrics):
         
         dataset = dataset_metrics['dataset']
         print(f"{dataset}:")
-        print(f"  ✅ Correct answers:")
+        print(f"  Correct answers:")
         print(f"     Mean: {dataset_metrics['mean_score_correct']:.4f} ± {dataset_metrics['std_score_correct']:.4f}")
-        print(f"  ❌ Wrong answers:")
+        print(f"  Wrong answers:")
         print(f"     Mean: {dataset_metrics['mean_score_wrong']:.4f} ± {dataset_metrics['std_score_wrong']:.4f}")
-        print(f"  📊 Score Gap: {dataset_metrics['score_gap']:.4f}")
+        print(f"  Score Gap: {dataset_metrics['score_gap']:.4f}")
         print()
 
 
 def print_latex_table(gsm8k_metrics, math_metrics):
-    """打印LaTeX表格"""
+    """Print the LaTeX table."""
     print(f"\n{'='*80}")
-    print("📄 LaTeX Table (for paper)")
+    print("LaTeX Table (for paper)")
     print(f"{'='*80}\n")
     
     print("\\begin{table}[h]")
@@ -246,7 +246,7 @@ def print_latex_table(gsm8k_metrics, math_metrics):
 
 
 def save_json_results(gsm8k_metrics, math_metrics, output_file):
-    """保存JSON格式结果"""
+    """Save the results as JSON."""
     results = {
         'gsm8k': gsm8k_metrics,
         'math': math_metrics,
@@ -255,7 +255,7 @@ def save_json_results(gsm8k_metrics, math_metrics, output_file):
     with open(output_file, 'w') as f:
         json.dump(results, f, indent=2)
     
-    print(f"✓ Results saved to: {output_file}")
+    print(f"[OK] Results saved to: {output_file}")
 
 
 if __name__ == "__main__":
@@ -270,11 +270,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     print(f"\n{'='*80}")
-    print("🔍 BMC Results Evaluation")
+    print("BMC Results Evaluation")
     print(f"{'='*80}\n")
     print(f"Result directory: {args.result_dir}\n")
     
-    # 评估GSM8K
+    # Evaluate GSM8K
     print("Loading GSM8K results...")
     gsm8k_results = load_bmc_results(args.result_dir, "gsm8k")
     gsm8k_metrics = None
@@ -283,7 +283,7 @@ if __name__ == "__main__":
         gsm8k_metrics = evaluate_bmc(gsm8k_results, "gsm8k")
     print()
     
-    # 评估MATH
+    # Evaluate MATH
     print("Loading MATH results...")
     math_results = load_bmc_results(args.result_dir, "math")
     math_metrics = None
@@ -292,14 +292,14 @@ if __name__ == "__main__":
         math_metrics = evaluate_bmc(math_results, "math")
     print()
     
-    # 打印结果
+    # Report results
     if gsm8k_metrics or math_metrics:
         print_results(gsm8k_metrics, math_metrics)
         print_latex_table(gsm8k_metrics, math_metrics)
         save_json_results(gsm8k_metrics, math_metrics, args.output)
     else:
-        print("❌ No valid results found!")
+        print("[ERROR] No valid results found!")
     
     print(f"\n{'='*80}")
-    print("✅ Evaluation completed!")
+    print("Evaluation completed!")
     print(f"{'='*80}\n")

@@ -3,13 +3,13 @@
 cd "$(dirname "$0")/.."
 
 # ============================================================
-# 🚀 Dream BMC 权重优化 - 快速启动脚本
-# 自动运行完整的优化流程
+# Dream BMC weight optimization - quick start script
+# Runs the full optimization pipeline end to end
 # ============================================================
 
-set -e  # 遇到错误立即退出
+set -e  # Exit immediately on error
 
-# 颜色定义
+# Color definitions
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -23,40 +23,40 @@ print_header() {
 }
 
 print_success() {
-    echo -e "${GREEN}✓ $1${NC}"
+    echo -e "${GREEN}[OK] $1${NC}"
 }
 
 print_warning() {
-    echo -e "${YELLOW}⚠  $1${NC}"
+    echo -e "${YELLOW}[WARN] $1${NC}"
 }
 
 print_error() {
-    echo -e "${RED}❌ $1${NC}"
+    echo -e "${RED}[ERROR] $1${NC}"
 }
 
 # ============================================================
-# 参数配置
+# Parameter configuration
 # ============================================================
 
 DATASET=${1:-gsm8k}  # gsm8k | math | arc | gpqa
 RESULT_DIR=${2:-results_bmc}
 METHODS=${3:-all}  # all, bayes, xgboost, logistic, grid
 
-print_header "Dream BMC 权重优化工具"
+print_header "Dream BMC Weight Optimization Tool"
 echo ""
-echo "配置："
-echo "  数据集: $DATASET"
-echo "  结果目录: $RESULT_DIR"
-echo "  优化方法: $METHODS"
+echo "Configuration:"
+echo "  Dataset: $DATASET"
+echo "  Result directory: $RESULT_DIR"
+echo "  Optimization methods: $METHODS"
 echo ""
 
 # ============================================================
-# Step 1: 检查环境
+# Step 1: Check environment
 # ============================================================
 
-print_header "Step 1: 检查环境"
+print_header "Step 1: Check environment"
 
-# 检查 Python
+# Check Python
 if ! command -v python &> /dev/null; then
     if ! command -v python3 &> /dev/null; then
         print_error "Python not found"
@@ -69,9 +69,9 @@ else
 fi
 print_success "Python found: $($PYTHON_CMD --version)"
 
-# 检查必需的包
+# Check required packages
 echo ""
-echo "检查依赖包..."
+echo "Checking required packages..."
 
 MISSING_PACKAGES=()
 
@@ -91,50 +91,50 @@ fi
 
 print_success "All required packages installed"
 
-# 检查可选包
+# Check optional packages
 echo ""
-echo "检查可选包..."
+echo "Checking optional packages..."
 
 $PYTHON_CMD -c "import bayes_opt" 2>/dev/null && print_success "Bayesian Optimization: OK" || print_warning "Bayesian Optimization: Not installed (pip install bayesian-optimization)"
 $PYTHON_CMD -c "import xgboost" 2>/dev/null && print_success "XGBoost: OK" || print_warning "XGBoost: Not installed (pip install xgboost)"
 $PYTHON_CMD -c "import shap" 2>/dev/null && print_success "SHAP: OK" || print_warning "SHAP: Not installed (pip install shap)"
 
 # ============================================================
-# Step 2: 诊断数据
+# Step 2: Diagnose data
 # ============================================================
 
-# print_header "Step 2: 数据诊断"
+# print_header "Step 2: Data diagnostics"
 
 # echo ""
-# echo "运行数据诊断..."
+# echo "Running data diagnostics..."
 # $PYTHON_CMD diagnose_bmc_data_dream.py \
 #     --dataset $DATASET \
 #     --result_dir $RESULT_DIR
 
 # if [ $? -ne 0 ]; then
-#     print_error "数据诊断失败"
+#     print_error "Data diagnostics failed"
 #     exit 1
 # fi
 
 # echo ""
-# read -p "数据诊断完成。是否继续优化？(y/n) " -n 1 -r
+# read -p "Data diagnostics complete. Continue with optimization? (y/n) " -n 1 -r
 # echo
 # if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-#     print_warning "用户取消"
+#     print_warning "Cancelled by user"
 #     exit 0
 # fi
 
 # ============================================================
-# Step 3: 检查数据文件
+# Step 3: Check data files
 # ============================================================
 
-print_header "Step 3: 检查数据文件"
+print_header "Step 3: Check data files"
 
-# 尝试 merged 文件
+# Try the merged files first
 PATTERN="$RESULT_DIR/${DATASET}_*_merged.json"
 NUM_FILES=$(ls $PATTERN 2>/dev/null | wc -l)
 
-# 如果没有 merged 文件，尝试 rank 文件
+# Fall back to per-rank files if no merged file exists
 if [ $NUM_FILES -eq 0 ]; then
     PATTERN="$RESULT_DIR/${DATASET}_*_rank*_generations.json"
     NUM_FILES=$(ls $PATTERN 2>/dev/null | wc -l)
@@ -143,7 +143,7 @@ fi
 if [ $NUM_FILES -eq 0 ]; then
     print_error "No result files found matching: $PATTERN"
     echo ""
-    echo "请先运行 BMC 评估："
+    echo "Please run the BMC evaluation first:"
     echo "  bash run_bmc_dream.sh"
     exit 1
 fi
@@ -151,17 +151,17 @@ fi
 print_success "Found $NUM_FILES result files"
 
 # ============================================================
-# Step 4: 运行优化
+# Step 4: Run optimization
 # ============================================================
 
-print_header "Step 4: 运行优化"
+print_header "Step 4: Run optimization"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_DIR="bmc_optimization_${DATASET}_${TIMESTAMP}"
 
 echo ""
-echo "输出目录: $OUTPUT_DIR"
-echo "开始优化..."
+echo "Output directory: $OUTPUT_DIR"
+echo "Starting optimization..."
 echo ""
 
 $PYTHON_CMD optimize_bmc_weights_dream.py \
@@ -171,57 +171,57 @@ $PYTHON_CMD optimize_bmc_weights_dream.py \
     --methods $METHODS
 
 if [ $? -eq 0 ]; then
-    print_success "优化完成！"
+    print_success "Optimization complete!"
 else
-    print_error "优化失败"
+    print_error "Optimization failed"
     exit 1
 fi
 
 # ============================================================
-# Step 5: 显示结果
+# Step 5: Show results
 # ============================================================
 
-print_header "Step 5: 结果摘要"
+print_header "Step 5: Results summary"
 
 if [ -f "$OUTPUT_DIR/method_comparison.csv" ]; then
     echo ""
-    echo "方法对比："
+    echo "Method comparison:"
     cat "$OUTPUT_DIR/method_comparison.csv"
 fi
 
 echo ""
-print_success "所有结果已保存到: $OUTPUT_DIR"
+print_success "All results saved to: $OUTPUT_DIR"
 echo ""
-echo "生成的文件："
-echo "  📊 method_comparison.png       - 方法对比图"
-echo "  📊 weights_heatmap.png         - 权重热图"
-echo "  📋 method_comparison.csv       - 对比数据表"
-echo "  💾 optimization_results.json   - 完整结果"
-echo "  🔧 optimized_weights.py        - 最优权重代码"
+echo "Generated files:"
+echo "  method_comparison.png       - Method comparison plot"
+echo "  weights_heatmap.png         - Weight heatmap"
+echo "  method_comparison.csv       - Comparison data table"
+echo "  optimization_results.json   - Full results"
+echo "  optimized_weights.py        - Best-weight code snippet"
 
 # ============================================================
-# Step 6: 下一步建议
+# Step 6: Next steps
 # ============================================================
 
-print_header "下一步"
+print_header "Next steps"
 
 echo ""
-echo "1. 查看可视化结果："
+echo "1. Inspect the visualizations:"
 echo "   open $OUTPUT_DIR/method_comparison.png"
 echo "   open $OUTPUT_DIR/weights_heatmap.png"
 echo ""
-echo "2. 查看优化后的权重："
+echo "2. Inspect the optimized weights:"
 echo "   cat $OUTPUT_DIR/optimized_weights.py"
 echo ""
-echo "3. 使用优化权重运行评估："
-echo "   # 编辑 run_bmc_dream.sh"
+echo "3. Run evaluation with the optimized weights:"
+echo "   # Edit run_bmc_dream.sh"
 echo "   OPTIMIZED_WEIGHTS_PATH=\"$OUTPUT_DIR/optimization_results.json\""
 echo "   bash run_bmc_dream.sh"
 echo ""
-echo "4. 分析效果："
+echo "4. Analyze the outcome:"
 echo "   python analyze_bmc_results_dream.py --result_dir results_bmc_distributed --task_name $DATASET"
 echo ""
-echo "5. 优化其他任务："
+echo "5. Optimize other tasks:"
 echo "   bash search_bmc_weights_dream.sh math      # MATH"
 echo "   bash search_bmc_weights_dream.sh humaneval # HumanEval"
 echo "   bash search_bmc_weights_dream.sh mbpp      # MBPP"
@@ -229,5 +229,5 @@ echo "   bash search_bmc_weights_dream.sh gpqa      # GPQA"
 echo "   bash search_bmc_weights_dream.sh arc       # ARC"
 echo ""
 
-print_header "完成！"
+print_header "Done!"
 echo ""

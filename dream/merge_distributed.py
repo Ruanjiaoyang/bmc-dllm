@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-合并分布式评估结果
-从多个rank的JSON文件中合并数据，重新计算准确率
+Merge distributed evaluation results.
+Combines the per-rank JSON files and recomputes the overall accuracy.
 """
 import argparse
 import json
@@ -12,16 +12,16 @@ from pathlib import Path
 
 def merge_results(result_dir, dataset, gen_length=None):
     """
-    合并指定任务和生成长度的所有rank结果
+    Merge all rank results for a given task and generation length.
     
     Args:
-        result_dir: 结果目录
-        dataset: 任务名称（gsm8k, math, arc, gpqa）
-        gen_length: 生成长度（可选，用于筛选）
+        result_dir: directory containing the result files
+        dataset: task name (gsm8k, math, arc, gpqa)
+        gen_length: generation length (optional, used to filter files)
     """
-    # 构建文件匹配模式 - 修复以匹配 eval_acc_dream.py 的输出格式
+    # Build the file glob so it matches the output format of eval_acc_dream.py
     if gen_length:
-        # 匹配格式: gsm8k_len128_0_results.json
+        # Expected format: gsm8k_len128_0_results.json
         pattern = f"{result_dir}/{dataset}_len{gen_length}_[0-9]*_results.json"
     else:
         pattern = f"{result_dir}/{dataset}_len*_[0-9]*_results.json"
@@ -29,7 +29,7 @@ def merge_results(result_dir, dataset, gen_length=None):
     files = sorted(glob.glob(pattern))
     
     if not files:
-        print(f"⚠️  No files found matching: {pattern}")
+        print(f"[WARN] No files found matching: {pattern}")
         return None
     
     print(f"\n{'='*60}")
@@ -42,52 +42,52 @@ def merge_results(result_dir, dataset, gen_length=None):
     total_correct = 0
     total_samples = 0
     
-    # 收集所有rank的数据
+    # Collect the data from every rank
     for file in files:
         try:
             with open(file, 'r') as f:
                 data = json.load(f)
             
-            # 兼容两种格式
+            # Support both result file layouts
             generations = data.get('results', data.get('generations', []))
             all_results.extend(generations)
             
-            # 统计正确数
+            # Count the correct predictions
             for gen in generations:
                 is_correct = gen.get('is_correct', False)
                 if is_correct:
                     total_correct += 1
                 total_samples += 1
             
-            # 保存配置（从第一个文件）
+            # Keep the config of the first file as the merged config
             if config is None:
                 config = data.get('config', {})
-                # 确保 task_name 存在
+                # Make sure task_name is present
                 if 'task_name' not in config:
                     config['task_name'] = config.get('dataset', dataset)
             
-            print(f"  ✓ Loaded {len(generations)} samples from {Path(file).name}")
+            print(f"  [OK] Loaded {len(generations)} samples from {Path(file).name}")
             
         except Exception as e:
-            print(f"  ⚠️  Error loading {file}: {e}")
+            print(f"  [WARN] Error loading {file}: {e}")
             continue
     
     if total_samples == 0:
-        print("❌ No valid samples found")
+        print("[ERROR] No valid samples found")
         return None
     
-    # 计算整体准确率
+    # Compute the overall accuracy
     overall_accuracy = total_correct / total_samples
     
     print(f"\n{'='*60}")
-    print(f"📊 Merged Statistics:")
+    print(f"Merged Statistics:")
     print(f"{'='*60}")
     print(f"Total samples: {total_samples}")
     print(f"Correct: {total_correct}")
     print(f"Accuracy: {overall_accuracy:.4f} ({overall_accuracy*100:.2f}%)")
     print(f"{'='*60}\n")
     
-    # 构建合并后的数据
+    # Assemble the merged payload
     merged_data = {
         'generations': all_results,
         'metrics': {
@@ -99,14 +99,14 @@ def merge_results(result_dir, dataset, gen_length=None):
         'num_ranks_merged': len(files),
     }
     
-    # 生成输出文件名
+    # Build the output file name
     output_file = f"{result_dir}/{dataset}_len{gen_length}_merged.json"
     
-    # 保存合并结果
+    # Write the merged results
     with open(output_file, 'w') as f:
         json.dump(merged_data, f, indent=2)
     
-    print(f"💾 Merged results saved to: {output_file}")
+    print(f"Merged results saved to: {output_file}")
     
     return merged_data
 

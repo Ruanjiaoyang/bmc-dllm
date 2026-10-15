@@ -50,40 +50,40 @@ from data_utils import (
 def main(grpo_config, model_config):
     import torch.distributed as dist
 
-    # 🔥 添加进程标识
+    # Process identity, used to tag log lines
     rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
 
     print(f"{'=' * 60}")
-    print(f"[Rank {rank}/{world_size}] 🚀 Starting main function")
+    print(f"[Rank {rank}/{world_size}] Starting main function")
     print(f"{'=' * 60}")
 
     # Set seed for reproducibility
     set_random_seed(grpo_config.seed)
-    print(f"[Rank {rank}] ✅ Random seed set: {grpo_config.seed}")
+    print(f"[Rank {rank}] [OK] Random seed set: {grpo_config.seed}")
 
     # Load dataset based on configuration
-    print(f"[Rank {rank}] 📊 Loading dataset: {grpo_config.dataset}")
+    print(f"[Rank {rank}] Loading dataset: {grpo_config.dataset}")
 
     # Load dataset based on configuration
     if grpo_config.dataset == "gsm8k":
         dataset = get_gsm8k_questions("train")
 
-        # 🔥 选择是否使用BMC增强的奖励函数
-        # 通过grpo_config.use_bmc参数控制（需要在配置中添加）
+        # Select between the BMC-augmented and the standard reward function
+        # Controlled by the grpo_config.use_bmc flag
         use_bmc = getattr(grpo_config, 'use_bmc', False)
 
         if use_bmc:
-            print("✅ 使用BMC增强的奖励函数")
+            print("[INFO] Using the BMC-augmented reward function")
             reward_functions = [
                 xmlcount_reward_func,
                 soft_format_reward_func,
                 strict_format_reward_func,
                 int_reward_func,
-                bmc_reward_gsm8k,  # 🔥 使用BMC增强的奖励函数
+                bmc_reward_gsm8k,
             ]
         else:
-            print("使用标准奖励函数")
+            print("[INFO] Using the standard reward function")
             reward_functions = [
                 xmlcount_reward_func,
                 soft_format_reward_func,
@@ -103,17 +103,17 @@ def main(grpo_config, model_config):
     elif grpo_config.dataset == "math":
         dataset = get_math_questions("train")
 
-        # 🔥 选择是否使用BMC增强的奖励函数
+        # Select between the BMC-augmented and the standard reward function
         use_bmc = getattr(grpo_config, 'use_bmc', False)
 
         if use_bmc:
-            print("✅ 使用BMC增强的奖励函数 (MATH)")
+            print("[INFO] Using the BMC-augmented reward function (MATH)")
             reward_functions = [
-                bmc_reward_math,  # 🔥 使用BMC增强的MATH奖励函数
+                bmc_reward_math,
                 boxed_and_answer_tags_format_reward,
             ]
         else:
-            print("使用标准奖励函数 (MATH)")
+            print("[INFO] Using the standard reward function (MATH)")
             reward_functions = [
                 correctness_reward_func_math,
                 boxed_and_answer_tags_format_reward,
@@ -121,17 +121,17 @@ def main(grpo_config, model_config):
     elif grpo_config.dataset == "olympic":
         dataset = get_olympic_questions("train")
 
-        # 🔥 选择是否使用BMC增强的奖励函数
+        # Select between the BMC-augmented and the standard reward function
         use_bmc = getattr(grpo_config, 'use_bmc', False)
 
         if use_bmc:
-            print("✅ 使用BMC增强的奖励函数 (Olympic)")
+            print("[INFO] Using the BMC-augmented reward function (Olympic)")
             reward_functions = [
-                bmc_reward_olympic,  # 🔥 使用BMC增强的Olympic奖励函数
+                bmc_reward_olympic,
                 boxed_and_answer_tags_format_reward,
             ]
         else:
-            print("使用标准奖励函数 (Olympic)")
+            print("[INFO] Using the standard reward function (Olympic)")
             reward_functions = [
                 correctness_reward_func_olympic,
                 boxed_and_answer_tags_format_reward,
@@ -139,51 +139,51 @@ def main(grpo_config, model_config):
     elif grpo_config.dataset == "gpqa":
         dataset = get_gpqa_questions("train", subset="main")
 
-        # 🔥 选择是否使用BMC增强的奖励函数
+        # Select between the BMC-augmented and the standard reward function
         use_bmc = getattr(grpo_config, 'use_bmc', False)
 
         if use_bmc:
-            print("✅ 使用BMC增强的奖励函数 (GPQA)")
+            print("[INFO] Using the BMC-augmented reward function (GPQA)")
             reward_functions = [
-                bmc_reward_gpqa,  # 🔥 使用BMC增强的GPQA奖励函数
+                bmc_reward_gpqa,
             ]
         else:
-            print("使用标准奖励函数 (GPQA)")
+            print("[INFO] Using the standard reward function (GPQA)")
             reward_functions = [
                 correctness_reward_func_gpqa,
             ]
     elif grpo_config.dataset == "arc":
         dataset = get_arc_questions("train")
 
-        # 🔥 选择是否使用BMC增强的奖励函数
+        # Select between the BMC-augmented and the standard reward function
         use_bmc = getattr(grpo_config, 'use_bmc', False)
 
         if use_bmc:
-            print("✅ 使用BMC增强的奖励函数 (ARC)")
+            print("[INFO] Using the BMC-augmented reward function (ARC)")
             reward_functions = [
-                bmc_reward_arc,  # 🔥 使用BMC增强的ARC奖励函数
+                bmc_reward_arc,
             ]
         else:
-            print("使用标准奖励函数 (ARC)")
+            print("[INFO] Using the standard reward function (ARC)")
             reward_functions = [
                 correctness_reward_func_arc,
             ]
 
     # Shuffle dataset with fixed seed for reproducibility
     dataset = dataset.shuffle(seed=grpo_config.seed)
-    print(f"[Rank {rank}] ✅ Dataset shuffled")
+    print(f"[Rank {rank}] [OK] Dataset shuffled")
 
-    # 🔥 同步所有进程
+    # Synchronize all ranks
     if dist.is_initialized():
         dist.barrier()
-        print(f"[Rank {rank}] ✅ Passed dataset shuffle barrier")
+        print(f"[Rank {rank}] [OK] Passed dataset shuffle barrier")
 
     # Split dataset if needed
     if grpo_config.dataset in ["countdown", "sudoku", "sudoku_new"]:
         train_set = dataset.select(range(0, len(dataset) - 500))  # Leave last 500 for evaluation
     else:
         train_set = dataset
-    print(f"[Rank {rank}] ✅ Train set ready: {len(train_set)} samples")
+    print(f"[Rank {rank}] [OK] Train set ready: {len(train_set)} samples")
 
     # Set up device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -217,53 +217,53 @@ def main(grpo_config, model_config):
         lora_dropout=model_config.lora_dropout,
     )
 
-    # 🔥 初始化BMC探针（如果使用BMC奖励函数）
+    # Initialize the BMC probe when a BMC reward function is in use
     use_bmc = getattr(grpo_config, 'use_bmc', False)
     if use_bmc and grpo_config.dataset in ["gsm8k", "math", "olympic", "gpqa", "arc"]:
         print("\n" + "=" * 60)
-        print("初始化BMC探针...")
+        print("Initializing BMC probe...")
         print("=" * 60)
 
-        # 计算总训练步数
+        # Compute the total number of training steps
         # total_steps = (dataset_size / batch_size) * num_epochs
         dataset_size = len(train_set)
         batch_size = grpo_config.per_device_train_batch_size * grpo_config.gradient_accumulation_steps
         if torch.cuda.device_count() > 1:
             batch_size *= torch.cuda.device_count()
 
-        # 如果设置了max_steps，使用max_steps；否则根据num_epochs计算
+        # Use max_steps when it is set, otherwise derive the count from num_train_epochs
         if hasattr(grpo_config, 'max_steps') and grpo_config.max_steps > 0:
             total_steps = grpo_config.max_steps
         else:
             steps_per_epoch = dataset_size // batch_size
             total_steps = steps_per_epoch * grpo_config.num_train_epochs
 
-        print(f"数据集大小: {dataset_size}")
-        print(f"有效批次大小: {batch_size}")
-        print(f"预计总步数: {total_steps}")
+        print(f"Dataset size: {dataset_size}")
+        print(f"Effective batch size: {batch_size}")
+        print(f"Estimated total steps: {total_steps}")
 
-        # 训练配置
+        # Training configuration
         training_config = {
             'total_steps': total_steps,
             'num_epochs': grpo_config.num_train_epochs,
             'dataset_size': dataset_size,
-            'dataset': grpo_config.dataset,  # 🔥 添加数据集名称，用于BMC任务类型推断
+            'dataset': grpo_config.dataset,  # lets the BMC probe infer the task type
         }
 
-        # BMC配置参数（可以通过grpo_config传入）
+        # BMC probe parameters (overridable through grpo_config)
         bmc_kwargs = {
             'adaptive_t': getattr(grpo_config, 'bmc_adaptive_t', True),
             'num_samples': getattr(grpo_config, 'bmc_num_samples', 1),
             'aggressive_scoring': getattr(grpo_config, 'bmc_aggressive_scoring', False),
         }
 
-        # 优先级：手动指定的权重 > 从文件加载的权重 > aggressive_scoring
+        # Priority: explicit weights > weights loaded from file > aggressive_scoring
         if hasattr(grpo_config, 'bmc_optimized_weights') and grpo_config.bmc_optimized_weights:
-            # 优先使用手动指定的权重
+            # Explicitly provided weights win
             bmc_kwargs['optimized_weights'] = grpo_config.bmc_optimized_weights
-            print("✅ 使用手动指定的优化权重")
+            print("[OK] Using the explicitly provided optimized weights")
         elif hasattr(grpo_config, 'bmc_weights_path') and grpo_config.bmc_weights_path:
-            # 从文件自动加载权重
+            # Load the weights from file
             from bmc_weights_loader import load_optimized_weights
             try:
                 loaded_weights = load_optimized_weights(
@@ -272,15 +272,15 @@ def main(grpo_config, model_config):
                 )
                 if loaded_weights:
                     bmc_kwargs['optimized_weights'] = loaded_weights
-                    print("✅ 从文件自动加载优化权重")
-                    print(f"   路径: {grpo_config.bmc_weights_path}")
+                    print("[OK] Loaded optimized weights from file")
+                    print(f"   path: {grpo_config.bmc_weights_path}")
             except Exception as e:
-                print(f"⚠️  加载权重文件失败: {e}")
-                print(f"   将使用aggressive_scoring策略")
+                print(f"[WARN] Failed to load the weight file: {e}")
+                print(f"   falling back to the aggressive_scoring strategy")
         else:
-            print("ℹ️  使用aggressive_scoring策略")
+            print("[INFO] Using the aggressive_scoring strategy")
 
-        # 初始化BMC探针
+        # Initialize the BMC probe
         initialize_bmc_probe(
             model=model,
             tokenizer=tokenizer,

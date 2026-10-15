@@ -3,13 +3,13 @@
 cd "$(dirname "$0")/.."
 
 # ============================================================
-# 🚀 BMC评分优化 - 快速启动脚本
-# 自动运行完整的优化流程
+# BMC scoring optimization - quick start script
+# Runs the full weight-optimization pipeline end to end.
 # ============================================================
 
-set -e  # 遇到错误立即退出
+set -e  # Abort immediately on any error
 
-# 颜色定义
+# Color definitions
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -23,49 +23,49 @@ print_header() {
 }
 
 print_success() {
-    echo -e "${GREEN}✓ $1${NC}"
+    echo -e "${GREEN}[OK] $1${NC}"
 }
 
 print_warning() {
-    echo -e "${YELLOW}⚠  $1${NC}"
+    echo -e "${YELLOW}[WARN] $1${NC}"
 }
 
 print_error() {
-    echo -e "${RED}❌ $1${NC}"
+    echo -e "${RED}[ERROR] $1${NC}"
 }
 
 # ============================================================
-# 参数配置
+# Parameters
 # ============================================================
 
 DATASET=${1:-gsm8k}  # gsm8k | math | arc | gpqa
 RESULT_DIR=${2:-results_with_bmc_with_weights}  # output of scripts/run_bmc.sh
 METHODS=${3:-all}  # all, bayes, xgboost, logistic, grid
 
-print_header "BMC评分公式优化工具"
+print_header "BMC scoring formula optimization tool"
 echo ""
-echo "配置："
-echo "  数据集: $DATASET"
-echo "  结果目录: $RESULT_DIR"
-echo "  优化方法: $METHODS"
+echo "Configuration:"
+echo "  Dataset: $DATASET"
+echo "  Result dir: $RESULT_DIR"
+echo "  Optimization methods: $METHODS"
 echo ""
 
 # ============================================================
-# Step 1: 检查环境
+# Step 1: Check the environment
 # ============================================================
 
-print_header "Step 1: 检查环境"
+print_header "Step 1: Check the environment"
 
-# 检查Python
+# Check Python
 if ! command -v python &> /dev/null; then
     print_error "Python not found"
     exit 1
 fi
 print_success "Python found: $(python --version)"
 
-# 检查必需的包
+# Check the required packages
 echo ""
-echo "检查依赖包..."
+echo "Checking required packages..."
 
 MISSING_PACKAGES=()
 
@@ -87,44 +87,44 @@ fi
 
 print_success "All required packages installed"
 
-# 检查可选包
+# Check the optional packages
 echo ""
-echo "检查可选包..."
+echo "Checking optional packages..."
 
 python -c "import bayes_opt" 2>/dev/null && print_success "Bayesian Optimization: OK" || print_warning "Bayesian Optimization: Not installed"
 python -c "import xgboost" 2>/dev/null && print_success "XGBoost: OK" || print_warning "XGBoost: Not installed"
 python -c "import shap" 2>/dev/null && print_success "SHAP: OK" || print_warning "SHAP: Not installed"
 
 # # ============================================================
-# # Step 2: 诊断数据
+# # Step 2: Diagnose the data
 # # ============================================================
 
-# print_header "Step 2: 数据诊断"
+# print_header "Step 2: Data diagnostics"
 
 # echo ""
-# echo "运行数据诊断..."
+# echo "Running data diagnostics..."
 # python diagnose_data.py \
 #     --dataset $DATASET \
 #     --result_dir $RESULT_DIR
 
 # if [ $? -ne 0 ]; then
-#     print_error "数据诊断失败"
+#     print_error "Data diagnostics failed"
 #     exit 1
 # fi
 
 # echo ""
-# read -p "数据诊断完成。是否继续优化？(y/n) " -n 1 -r
+# read -p "Data diagnostics complete. Continue with optimization? (y/n) " -n 1 -r
 # echo
 # if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-#     print_warning "用户取消"
+#     print_warning "Cancelled by user"
 #     exit 0
 # fi
 
 # ============================================================
-# Step 3: 检查数据
+# Step 3: Check the data
 # ============================================================
 
-print_header "Step 3: 检查数据文件"
+print_header "Step 3: Check the data files"
 
 PATTERN="$RESULT_DIR/${DATASET}_*_bmc_v2_*_generations.json"
 NUM_FILES=$(ls $PATTERN 2>/dev/null | wc -l)
@@ -132,7 +132,7 @@ NUM_FILES=$(ls $PATTERN 2>/dev/null | wc -l)
 if [ $NUM_FILES -eq 0 ]; then
     print_error "No result files found matching: $PATTERN"
     echo ""
-    echo "请先运行BMC评估："
+    echo "Run the BMC evaluation first:"
     echo "  bash run_bmc_experiments_simplified.sh"
     exit 1
 fi
@@ -140,17 +140,17 @@ fi
 print_success "Found $NUM_FILES result files"
 
 # ============================================================
-# Step 4: 运行优化
+# Step 4: Run the optimization
 # ============================================================
 
-print_header "Step 4: 运行优化"
+print_header "Step 4: Run the optimization"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_DIR="bmc_optimization_${DATASET}_${TIMESTAMP}"
 
 echo ""
-echo "输出目录: $OUTPUT_DIR"
-echo "开始优化..."
+echo "Output dir: $OUTPUT_DIR"
+echo "Starting optimization..."
 echo ""
 
 python optimize_bmc_weights.py \
@@ -160,60 +160,57 @@ python optimize_bmc_weights.py \
     --methods $METHODS
 
 if [ $? -eq 0 ]; then
-    print_success "优化完成！"
+    print_success "Optimization complete!"
 else
-    print_error "优化失败"
+    print_error "Optimization failed"
     exit 1
 fi
 
 # ============================================================
-# Step 5: 显示结果
+# Step 5: Show the results
 # ============================================================
 
-print_header "Step 5: 结果摘要"
+print_header "Step 5: Result summary"
 
 if [ -f "$OUTPUT_DIR/method_comparison.csv" ]; then
     echo ""
-    echo "方法对比："
+    echo "Method comparison:"
     cat "$OUTPUT_DIR/method_comparison.csv"
 fi
 
 echo ""
-print_success "所有结果已保存到: $OUTPUT_DIR"
+print_success "All results saved to: $OUTPUT_DIR"
 echo ""
-echo "生成的文件："
-echo "  📊 method_comparison.png       - 可视化对比图"
-echo "  📋 method_comparison.csv       - 对比数据表"
-echo "  💾 optimization_results.json   - 完整结果"
-echo "  🔧 optimized_scoring_formula.py - 最优公式代码"
+echo "Generated files:"
+echo "  method_comparison.png        - comparison plot"
+echo "  method_comparison.csv        - comparison table"
+echo "  optimization_results.json    - full results"
+echo "  optimized_scoring_formula.py - best formula as code"
 
 # ============================================================
-# Step 6: 下一步建议
+# Step 6: Suggested next steps
 # ============================================================
 
-print_header "下一步"
+print_header "Next steps"
 
 echo ""
-echo "1. 查看可视化结果："
+echo "1. View the plots:"
 echo "   open $OUTPUT_DIR/method_comparison.png"
 echo ""
-echo "2. 查看优化后的公式："
+echo "2. Inspect the optimized formula:"
 echo "   cat $OUTPUT_DIR/optimized_scoring_formula.py"
 echo ""
-echo "3. 在新数据上验证："
-echo "   # 修改 bmc_core.py 使用新权重"
-echo "   python eval_bmc.py --dataset $DATASET"
+echo "3. Validate on new data:"
+echo "   python eval_bmc.py --dataset $DATASET --optimized_weights_path $OUTPUT_DIR/optimization_results.json"
 echo ""
-echo "5. 优化其他任务："
-echo "   bash quick_start.sh math      # MATH500"
-echo "   bash quick_start.sh sudoku    # Sudoku"
-echo "   bash quick_start.sh countdown # Countdown"
-echo "   bash quick_start.sh aime      # AIME"
-echo "   bash quick_start.sh olympic   # Olympic"
-echo "   bash quick_start.sh gpqa      # GPQA"
-echo "   bash quick_start.sh logiqa    # LogiQA"
-echo "   bash quick_start.sh arc       # ARC"
+echo "4. Install the weights as the default for this task:"
+echo "   cp $OUTPUT_DIR/optimization_results.json weights/$DATASET.json"
+echo ""
+echo "5. Search weights for the other tasks:"
+echo "   bash scripts/search_bmc_weights.sh math   # MATH"
+echo "   bash scripts/search_bmc_weights.sh arc    # ARC-Challenge"
+echo "   bash scripts/search_bmc_weights.sh gpqa   # GPQA"
 echo ""
 
-print_header "完成！"
+print_header "Done!"
 echo ""

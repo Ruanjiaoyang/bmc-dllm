@@ -1,6 +1,6 @@
 """
-BMC-Resampling 结果分析脚本 - 支持优化权重
-分析自我纠正的效果，并能识别是否使用了优化权重
+BMC-Resampling result analysis script with support for optimized weights.
+Analyzes self-correction behavior and reports whether optimized weights were used.
 """
 import json
 import glob
@@ -14,7 +14,7 @@ from collections import defaultdict
 
 
 def load_resampling_results(pattern):
-    """加载所有匹配的结果文件"""
+    """Load every result file matching the given glob pattern."""
     files = glob.glob(pattern)
     all_data = []
     configs = []
@@ -34,9 +34,9 @@ def load_resampling_results(pattern):
                 if 'config' in data:
                     configs.append(data['config'])
 
-                print(f"  ✓ Loaded {len(results)} samples from {Path(file).name}")
+                print(f"  [OK] Loaded {len(results)} samples from {Path(file).name}")
         except Exception as e:
-            print(f"  ⚠️  Error loading {file}: {e}")
+            print(f"  [WARN] Error loading {file}: {e}")
 
     if configs:
         config = configs[0]
@@ -47,7 +47,7 @@ def load_resampling_results(pattern):
         print(f"  Temperature: {config.get('temperature', 'N/A')}")
         print(f"  t_probe: {config.get('t_probe', 'N/A')}")
 
-        # 🔥 NEW: 显示优化权重信息
+        # Report whether optimized weights were used for this run
         using_optimized = config.get('using_optimized_weights', False)
         weights_path = config.get('weights_path', None)
         print(f"  Using Optimized Weights: {using_optimized}")
@@ -60,26 +60,26 @@ def load_resampling_results(pattern):
 
 def analyze_resampling_effectiveness(results, verbose=True):
     """
-    分析 BMC-Resampling 的效果
+    Analyze the effectiveness of BMC-Resampling.
 
-    重点分析：
-    1. 自我纠正率（错误→正确）
-    2. 平均尝试次数
-    3. Early stopping效果
-    4. BMC分数与正确性的关系
+    Focus areas:
+    1. Self-correction rate (wrong → right)
+    2. Average number of attempts
+    3. Early-stopping behavior
+    4. Relationship between BMC score and correctness
     """
 
     if not results:
-        print("⚠️  No results to analyze")
+        print("[WARN] No results to analyze")
         return None
 
-    # 基础统计
+    # Basic statistics
     total_samples = len(results)
     final_accuracy = sum(1 for r in results if r.get('final_is_correct', False)) / total_samples
     avg_attempts = np.mean([r.get('num_attempts', 0) for r in results])
     early_stops = sum(1 for r in results if r.get('stopped_early', False))
 
-    # 自我纠正分析
+    # Self-correction analysis
     self_corrections = 0
     no_corrections = 0
     always_correct = 0
@@ -106,14 +106,14 @@ def analyze_resampling_effectiveness(results, verbose=True):
         if first_correct:
             first_attempt_accuracy += 1
 
-        # 自我纠正检测
+        # Self-correction detection
         if len(attempts) > 1:
             if not first_correct and final_correct:
                 self_corrections += 1
             elif first_correct and not final_correct:
-                no_corrections += 1  # 第一次对但最终选错了（理论上不应该）
+                no_corrections += 1  # First attempt was right but a wrong candidate was selected (should not happen)
 
-        # 全程正确/错误
+        # Correct/wrong across all attempts
         all_correct = all(a.get('is_correct', False) for a in attempts)
         all_wrong = all(not a.get('is_correct', False) for a in attempts)
 
@@ -122,7 +122,7 @@ def analyze_resampling_effectiveness(results, verbose=True):
         elif all_wrong:
             always_wrong += 1
 
-        # BMC分数变化
+        # BMC score change
         if len(attempts) > 1:
             first_bmc = attempts[0].get('bmc_score', 0)
             best_bmc = result.get('best_candidate', {}).get('bmc_score', 0)
@@ -136,7 +136,7 @@ def analyze_resampling_effectiveness(results, verbose=True):
 
     if verbose:
         print(f"\n{'=' * 80}")
-        print(f"📊 BMC-Resampling Analysis")
+        print(f"BMC-Resampling Analysis")
         print(f"{'=' * 80}")
         print(f"Total samples: {total_samples}")
         print(f"Final accuracy: {final_accuracy:.2%}")
@@ -144,7 +144,7 @@ def analyze_resampling_effectiveness(results, verbose=True):
         print(f"Accuracy improvement: {(final_accuracy - first_attempt_acc):.2%}")
 
         print(f"\n{'=' * 80}")
-        print(f"🔄 Resampling Statistics:")
+        print(f"Resampling Statistics:")
         print(f"{'=' * 80}")
         print(f"Average attempts: {avg_attempts:.2f}")
         print(f"Early stops: {early_stops} ({early_stops / total_samples * 100:.1f}%)")
@@ -152,23 +152,23 @@ def analyze_resampling_effectiveness(results, verbose=True):
             f"Max attempts reached: {total_samples - early_stops} ({(total_samples - early_stops) / total_samples * 100:.1f}%)")
 
         print(f"\n{'=' * 80}")
-        print(f"✅ Self-Correction Analysis:")
+        print(f"Self-Correction Analysis:")
         print(f"{'=' * 80}")
         print(f"Self-corrections (wrong→right): {self_corrections} ({self_corrections / total_samples * 100:.1f}%)")
         print(f"Always correct: {always_correct} ({always_correct / total_samples * 100:.1f}%)")
         print(f"Always wrong: {always_wrong} ({always_wrong / total_samples * 100:.1f}%)")
 
         if no_corrections > 0:
-            print(f"⚠️  Regressions (right→wrong): {no_corrections}")
+            print(f"[WARN] Regressions (right→wrong): {no_corrections}")
 
         print(f"\n{'=' * 80}")
-        print(f"📈 BMC Score Changes:")
+        print(f"BMC Score Changes:")
         print(f"{'=' * 80}")
         print(f"Improvements: {bmc_improvements} ({bmc_improvements / total_samples * 100:.1f}%)")
         print(f"Degrades: {bmc_degrades} ({bmc_degrades / total_samples * 100:.1f}%)")
 
         print(f"\n{'=' * 80}")
-        print(f"📊 Attempt Distribution:")
+        print(f"Attempt Distribution:")
         print(f"{'=' * 80}")
         for num_att in sorted(attempt_distribution.keys()):
             count = attempt_distribution[num_att]
@@ -192,10 +192,10 @@ def analyze_resampling_effectiveness(results, verbose=True):
 
 
 def plot_resampling_analysis(analysis, task_name, output_dir, config=None):
-    """可视化分析结果"""
+    """Visualize the analysis results."""
     results = analysis['results']
 
-    # 🔥 NEW: 标题中显示是否使用优化权重
+    # Indicate in the plot title whether optimized weights were used
     title_suffix = ""
     if config:
         using_optimized = config.get('using_optimized_weights', False)
@@ -207,7 +207,7 @@ def plot_resampling_analysis(analysis, task_name, output_dir, config=None):
     plt.style.use('seaborn-v0_8-darkgrid')
     fig, axes = plt.subplots(2, 3, figsize=(20, 12))
 
-    # 1. 尝试次数分布
+    # 1. Attempt-count distribution
     ax = axes[0, 0]
     attempt_dist = analysis['attempt_distribution']
     attempts = sorted(attempt_dist.keys())
@@ -219,7 +219,7 @@ def plot_resampling_analysis(analysis, task_name, output_dir, config=None):
     ax.set_title(f'Attempt Distribution{title_suffix}', fontsize=14, fontweight='bold')
     ax.grid(alpha=0.3)
 
-    # 2. 准确率对比
+    # 2. Accuracy comparison
     ax = axes[0, 1]
     accuracies = [
         analysis['first_attempt_accuracy'],
@@ -240,7 +240,7 @@ def plot_resampling_analysis(analysis, task_name, output_dir, config=None):
                 f'{acc:.2%}',
                 ha='center', va='bottom', fontweight='bold')
 
-    # 3. 自我纠正统计
+    # 3. Self-correction statistics
     ax = axes[0, 2]
     categories = ['Self-\nCorrections', 'Always\nCorrect', 'Always\nWrong']
     values = [
@@ -255,10 +255,10 @@ def plot_resampling_analysis(analysis, task_name, output_dir, config=None):
     ax.set_title(f'Self-Correction Analysis{title_suffix}', fontsize=14, fontweight='bold')
     ax.grid(alpha=0.3, axis='y')
 
-    # 4. BMC分数演化（按尝试次数）
+    # 4. BMC score evolution (by attempt index)
     ax = axes[1, 0]
 
-    # 收集每次尝试的BMC分数
+    # Collect the BMC score of each attempt
     max_attempts_in_data = max(len(r.get('all_attempts', [])) for r in results)
     bmc_by_attempt = [[] for _ in range(max_attempts_in_data)]
 
@@ -283,7 +283,7 @@ def plot_resampling_analysis(analysis, task_name, output_dir, config=None):
     ax.legend()
     ax.grid(alpha=0.3)
 
-    # 5. 正确性 vs BMC分数
+    # 5. Correctness vs BMC score
     ax = axes[1, 1]
 
     correct_bmcs = []
@@ -312,10 +312,10 @@ def plot_resampling_analysis(analysis, task_name, output_dir, config=None):
     ax.set_title('BMC Score Distribution by Correctness', fontsize=14, fontweight='bold')
     ax.grid(alpha=0.3, axis='y')
 
-    # 6. Self-correction 详细分析
+    # 6. Detailed self-correction analysis
     ax = axes[1, 2]
 
-    # 统计：第一次错误的样本中，有多少通过resampling纠正了
+    # How many initially wrong samples were fixed by resampling
     first_wrong_samples = [r for r in results if not r.get('all_attempts', [{}])[0].get('is_correct', False)]
     if first_wrong_samples:
         corrected = sum(1 for r in first_wrong_samples if r.get('final_is_correct', False))
@@ -338,14 +338,14 @@ def plot_resampling_analysis(analysis, task_name, output_dir, config=None):
     plt.tight_layout()
     filename = output_dir / f'resampling_analysis_{task_name}.png'
     plt.savefig(filename, dpi=200, bbox_inches='tight')
-    print(f"\n📊 Plot saved to: {filename}")
+    print(f"\nPlot saved to: {filename}")
     plt.close()
 
 
 def compare_configurations(results_by_config, task_name, output_dir):
-    """比较不同配置的效果"""
+    """Compare the effectiveness of different configurations."""
     if len(results_by_config) < 2:
-        print("\n⚠️  Need at least 2 configurations to compare")
+        print("\n[WARN] Need at least 2 configurations to compare")
         return
 
     plt.style.use('seaborn-v0_8-darkgrid')
@@ -353,15 +353,15 @@ def compare_configurations(results_by_config, task_name, output_dir):
 
     configs = sorted(results_by_config.keys())
 
-    # 🔥 NEW: 区分优化权重和aggressive的颜色
+    # Use distinct colors for optimized-weight and aggressive-scoring configs
     colors = []
     for config in configs:
         if 'optimized' in config.lower():
-            colors.append('#2ecc71')  # 绿色表示优化权重
+            colors.append('#2ecc71')  # Green: optimized weights
         else:
-            colors.append('#3498db')  # 蓝色表示aggressive
+            colors.append('#3498db')  # Blue: aggressive scoring
 
-    # 1. 准确率对比
+    # 1. Accuracy comparison
     ax = axes[0]
     final_accs = [results_by_config[c]['final_accuracy'] for c in configs]
     first_accs = [results_by_config[c]['first_attempt_accuracy'] for c in configs]
@@ -382,7 +382,7 @@ def compare_configurations(results_by_config, task_name, output_dir):
     ax.legend()
     ax.grid(alpha=0.3, axis='y')
 
-    # 2. 平均尝试次数
+    # 2. Average number of attempts
     ax = axes[1]
     avg_attempts = [results_by_config[c]['avg_attempts'] for c in configs]
 
@@ -395,7 +395,7 @@ def compare_configurations(results_by_config, task_name, output_dir):
     ax.set_xticklabels(configs, rotation=45, ha='right')
     ax.grid(alpha=0.3, axis='y')
 
-    # 3. 自我纠正率
+    # 3. Self-correction rate
     ax = axes[2]
     self_corr_rates = [
         results_by_config[c]['self_corrections'] / results_by_config[c]['total_samples']
@@ -414,12 +414,12 @@ def compare_configurations(results_by_config, task_name, output_dir):
     plt.tight_layout()
     filename = output_dir / f'config_comparison_{task_name}.png'
     plt.savefig(filename, dpi=200, bbox_inches='tight')
-    print(f"\n📊 Comparison plot saved to: {filename}")
+    print(f"\nComparison plot saved to: {filename}")
     plt.close()
 
 
 def save_analysis_results(analysis_dict, config, output_dir, task_name):
-    """保存分析结果"""
+    """Save the analysis results to disk."""
     results_to_save = {
         'task_name': task_name,
         'timestamp': datetime.now().isoformat(),
@@ -445,7 +445,7 @@ def save_analysis_results(analysis_dict, config, output_dir, task_name):
     with open(json_file, 'w', encoding='utf-8') as f:
         json.dump(results_to_save, f, indent=2, ensure_ascii=False)
 
-    print(f"\n💾 Analysis results saved to: {json_file}")
+    print(f"\nAnalysis results saved to: {json_file}")
 
 
 if __name__ == "__main__":
@@ -466,7 +466,7 @@ if __name__ == "__main__":
                         help="Only analyze results with aggressive scoring")
     args = parser.parse_args()
 
-    # 创建输出目录
+    # Create the output directory
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
@@ -476,19 +476,19 @@ if __name__ == "__main__":
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{'=' * 80}")
-    print(f"🔄 BMC-Resampling Analysis Tool")
+    print(f"BMC-Resampling Analysis Tool")
     print(f"{'=' * 80}")
     print(f"Task: {args.dataset.upper()}")
     print(f"Output directory: {output_dir.absolute()}")
 
-    # 构建匹配模式
+    # Build the file matching pattern
     pattern_parts = [args.result_dir, args.dataset]
     if args.threshold is not None:
         pattern_parts.append(f"*threshold{args.threshold}*")
     if args.max_attempts is not None:
         pattern_parts.append(f"*max{args.max_attempts}*")
 
-    # 🔥 NEW: 过滤优化权重或aggressive
+    # Restrict to optimized-weight or aggressive-scoring runs
     if args.filter_optimized:
         pattern_parts.append("*optimized*")
     elif args.filter_aggressive:
@@ -499,22 +499,22 @@ if __name__ == "__main__":
     results, config = load_resampling_results(pattern)
 
     if len(results) == 0:
-        print(f"\n❌ No results found matching: {pattern}")
+        print(f"\n[ERROR] No results found matching: {pattern}")
     else:
-        # 单配置分析
+        # Single-configuration analysis
         if not args.compare_configs:
             analysis = analyze_resampling_effectiveness(results)
 
             if analysis:
-                # 生成可视化
+                # Generate the plots
                 plot_resampling_analysis(analysis, args.dataset, output_dir, config)
 
-                # 保存结果
+                # Save the results
                 save_analysis_results(analysis, config, output_dir, args.dataset)
 
-        # 多配置对比
+        # Multi-configuration comparison
         else:
-            # 加载所有配置
+            # Load every available configuration
             all_pattern = f"{args.result_dir}/{args.dataset}_*_results.json"
             all_files = glob.glob(all_pattern)
 
@@ -528,7 +528,7 @@ if __name__ == "__main__":
                         max_att = cfg.get('max_attempts', 0)
                         temp = cfg.get('temperature', 0.5)
 
-                        # 🔥 NEW: 在配置名中标记是否使用优化权重
+                        # Mark in the config name whether optimized weights were used
                         using_optimized = cfg.get('using_optimized_weights', False)
                         weight_type = "Opt" if using_optimized else "Agg"
 
@@ -539,12 +539,12 @@ if __name__ == "__main__":
                         if analysis:
                             results_by_config[config_name] = analysis
                 except Exception as e:
-                    print(f"⚠️  Error loading {file}: {e}")
+                    print(f"[WARN] Error loading {file}: {e}")
 
             if results_by_config:
                 compare_configurations(results_by_config, args.dataset, output_dir)
 
-                # 打印对比表
+                # Print the comparison table
                 print(f"\n{'=' * 80}")
                 print("Configuration Comparison:")
                 print(f"{'=' * 80}")
@@ -562,6 +562,6 @@ if __name__ == "__main__":
                 print(f"{'=' * 80}\n")
 
     print(f"\n{'=' * 80}")
-    print(f"✅ Analysis complete!")
+    print(f"Analysis complete!")
     print(f"All outputs saved to: {output_dir.absolute()}")
     print(f"{'=' * 80}\n")

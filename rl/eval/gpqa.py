@@ -103,7 +103,7 @@ class GPQADataset(GSM8KDataset):
         """
         question = item.get("Question", item.get("question", ""))
         
-        # 🔥 Collect all choices with labels
+        # Collect all choices with labels
         all_choices = [
             ("Correct", item.get("Correct Answer", "")),
             ("Incorrect", item.get("Incorrect Answer 1", "")),
@@ -111,7 +111,7 @@ class GPQADataset(GSM8KDataset):
             ("Incorrect", item.get("Incorrect Answer 3", ""))
         ]
         
-        # 🔥 Shuffle choices using question hash as seed
+        # Shuffle choices using the question hash as seed
         # This ensures:
         # 1. Each question has a fixed but different order (reproducible)
         # 2. Different questions have different orders (avoid position bias)
@@ -121,7 +121,7 @@ class GPQADataset(GSM8KDataset):
         rng = random.Random(shuffle_seed)
         rng.shuffle(all_choices)
         
-        # 🔥 Find the correct answer's new position
+        # Find the correct answer's new position
         correct_idx = next(i for i, (label, _) in enumerate(all_choices) 
                         if label == "Correct")
         correct_letter = chr(65 + correct_idx)  # A, B, C, or D
@@ -154,7 +154,7 @@ class GPQADataset(GSM8KDataset):
             samples = random.sample(range(min(len(train_data), 100)), min(self.num_examples, len(train_data)))
             for idx in samples:
                 item = train_data[idx]
-                # 🔥 修改：使用带shuffle的format函数
+                # Use the shuffling formatter so few-shot examples match the eval format
                 formatted_question, answer = self.format_question_with_choices(item)
                 few_shot_examples.append({"question": formatted_question, "answer": answer})
             
@@ -168,7 +168,7 @@ class GPQADataset(GSM8KDataset):
         """Get a single item from the dataset."""
         item = self.dataset[self.subsample[idx].item()]
         
-        # 🔥 修改：format函数现在返回(question, correct_letter)
+        # The formatter returns (question, correct_letter)
         question, answer = self.format_question_with_choices(item)
         
         prompt = self.create_prompt(question)

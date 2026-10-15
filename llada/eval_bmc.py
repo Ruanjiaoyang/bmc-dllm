@@ -1,9 +1,8 @@
 """
-统一的多任务 BMC V2 评估脚本 - 支持优化权重
-支持 GSM8K, MATH500, Sudoku, Countdown, HumanEval, MBPP
+Unified multi-task BMC V2 evaluation script with optimized-weight support.
+Supports GSM8K, MATH500, Sudoku, Countdown, HumanEval and MBPP.
 
-🔥 NEW: 自动加载和使用优化后的权重
-🔥 NEW: 支持代码生成任务 (HumanEval, MBPP)
+Optimized weights are loaded automatically when available.
 """
 import argparse
 import json
@@ -22,17 +21,17 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel
 from peft import PeftModel
 
-# 导入统一的数据集和工具
+# Unified dataset and task utilities
 from datasets_unified import create_dataset, DATASET_MAP
 from task_utils import get_task_config
 
-# 导入 BMC V2 和生成函数
+# BMC V2 estimator and the generation routine
 from bmc_core import BMCEstimator
 from generate import generate
 
 
 def init_seed(seed):
-    """初始化随机种子"""
+    """Initialize the random seeds."""
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
@@ -42,7 +41,7 @@ def init_seed(seed):
 
 
 def setup_ddp():
-    """设置分布式训练"""
+    """Set up distributed training."""
     dist.init_process_group("nccl")
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
@@ -50,12 +49,12 @@ def setup_ddp():
 
 
 def cleanup_ddp():
-    """清理分布式训练"""
+    """Tear down distributed training."""
     dist.destroy_process_group()
 
 
 class CustomDistributedSampler(DistributedSampler):
-    """自定义分布式采样器"""
+    """Distributed sampler that keeps every sample, even with uneven splits."""
 
     def __init__(
         self,
@@ -98,34 +97,34 @@ class CustomDistributedSampler(DistributedSampler):
 
 def load_optimized_weights(task_name: str = None, weights_path: str = None, verbose: bool = True):
     """
-    🔥 NEW: 自动加载最佳权重
+    Load the best available BMC feature weights.
 
-    优先级：
-    1. 如果指定了weights_path，直接加载
-    2. 否则搜索task_name相关的最佳权重
-    3. 都没有则返回None（使用默认aggressive_scoring）
+    Priority:
+    1. Load `weights_path` directly if it is given.
+    2. Otherwise search for the best weights matching `task_name`.
+    3. If nothing is found, return None (fall back to default aggressive_scoring).
 
     Returns:
-        Dict: 权重字典，如果没找到返回None
+        Dict: the weight dictionary, or None if no weights were found.
     """
     if weights_path:
-        # 指定了权重文件
+        # An explicit weight file was requested
         if not os.path.exists(weights_path):
             if verbose:
-                print(f"⚠️  指定的权重文件不存在: {weights_path}")
+                print(f"[WARN] Weights file not found: {weights_path}")
             return None
 
         try:
             with open(weights_path, 'r') as f:
                 data = json.load(f)
 
-            # 支持两种格式
+            # Two file layouts are supported
             if 'weights' in data:
                 weights = data['weights']
                 method = data.get('method', 'unknown')
                 metrics = data.get('metrics', {})
             elif 'optimized_results' in data:
-                # 找最佳方法
+                # Pick the best-performing method
                 best_result = max(data['optimized_results'],
                                 key=lambda x: x['metrics'].get('roc_auc', 0))
                 weights = best_result['weights']
@@ -133,18 +132,18 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
                 metrics = best_result['metrics']
             else:
                 if verbose:
-                    print(f"⚠️  权重文件格式不正确: {weights_path}")
+                    print(f"[WARN] Unrecognized weights file format: {weights_path}")
                 return None
 
             if verbose:
                 print(f"\n{'='*60}")
-                print(f"✅ 已加载优化权重")
+                print(f"[OK] Loaded optimized weights")
                 print(f"{'='*60}")
-                print(f"文件: {weights_path}")
-                print(f"方法: {method}")
+                print(f"File: {weights_path}")
+                print(f"Method: {method}")
                 print(f"ROC-AUC: {metrics.get('roc_auc', 0):.4f}")
                 print(f"Score Gap: {metrics.get('score_gap', 0):.4f}")
-                print(f"\n权重配置:")
+                print(f"\nWeight configuration:")
                 for feat, weight in sorted(weights.items(), key=lambda x: -x[1]):
                     print(f"  {feat:25s}: {weight:.4f}")
                 print(f"{'='*60}\n")
@@ -153,18 +152,18 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
 
         except Exception as e:
             if verbose:
-                print(f"⚠️  加载权重文件失败: {e}")
+                print(f"[WARN] Failed to load weights file: {e}")
             return None
 
-    # 自动搜索最佳权重
+    # Otherwise, search for the best weights automatically
     if task_name:
-        # 搜索优化结果目录
+        # Candidate locations of optimization results
         patterns = [
             # weights released with this repo (weights/<task>.json), then any newly searched runs
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", f"{task_name}.json"),
             f"bmc_optimization_{task_name}_*/optimization_results.json",
             f"best_weights_{task_name}_*.json",
-            "bmc_optimization_*/optimization_results.json",  # 通用搜索
+            "bmc_optimization_*/optimization_results.json",  # generic fallback
         ]
 
         best_file = None
@@ -177,13 +176,13 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
                     with open(filepath, 'r') as f:
                         data = json.load(f)
 
-                    # 检查是否匹配任务
+                    # Skip files belonging to a different task
                     file_task = data.get('task', 'unknown')
                     if task_name and file_task != task_name:
                         continue
 
                     if 'optimized_results' in data:
-                        # 找最佳ROC-AUC
+                        # Keep the entry with the highest ROC-AUC
                         for result in data['optimized_results']:
                             if 'weights' not in result:
                                 continue
@@ -196,11 +195,11 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
 
         if best_file:
             if verbose:
-                print(f"🔍 自动发现最佳权重: {best_file}")
+                print(f"[INFO] Auto-detected best weights: {best_file}")
             return load_optimized_weights(task_name, best_file, verbose)
 
     if verbose:
-        print(f"ℹ️  未找到优化权重，将使用默认aggressive_scoring策略")
+        print(f"[INFO] No optimized weights found; falling back to the default aggressive_scoring strategy")
 
     return None
 
@@ -220,20 +219,20 @@ def evaluate_with_bmc(
     num_reverse_steps=5,
 ):
     """
-    带 BMC 的评估函数 - 多任务版本
+    Multi-task evaluation loop with BMC scoring.
 
     Args:
-        task_name: 任务名称，用于选择正确的答案提取器
+        task_name: task identifier used to select the matching answer extractor.
     """
     model.eval()
     total_processed = torch.tensor(0, device=model.device)
 
-    # 获取任务配置
+    # Task-specific extractor/validator
     task_config = get_task_config(task_name)
     answer_extractor = task_config["extractor"]
     answer_validator = task_config["validator"]
 
-    # 详细计时统计
+    # Detailed timing statistics
     wall_times = []
     bmc_times = []
     gen_times = []
@@ -241,19 +240,19 @@ def evaluate_with_bmc(
     all_generations = []
     device = model.device
 
-    # 任务特定的统计
+    # Task-specific counters
     task_stats = {
         "total_correct": 0,
         "total_samples": 0,
     }
 
-    # Sudoku 特殊统计
+    # Sudoku tracks cell-level statistics as well
     if task_name == "sudoku":
         task_stats["partial_correct_cells"] = 0
         task_stats["total_empty_cells"] = 0
 
     for batch in tqdm(dataloader, disable=(dist.get_rank() != 0)):
-        # 1. 正常生成
+        # 1. Standard generation
         gen_start = time.time()
         input_ids = batch["input_ids"].to(device)
         gt_answers = batch["answers"]
@@ -279,7 +278,7 @@ def evaluate_with_bmc(
         gen_time = time.time() - gen_start
         gen_times.append(gen_time)
 
-        # 2. BMC 评估
+        # 2. BMC evaluation
         bmc_start = time.time()
         bmc_scores_list = []
 
@@ -303,7 +302,7 @@ def evaluate_with_bmc(
                 continue
 
             try:
-                # ✅ 统一的BMC调用 - 所有任务使用相同接口
+                # Unified BMC call: every task uses the same interface
                 bmc_result = bmc_probe.probe(
                     question=question,
                     answer=answer,
@@ -328,7 +327,7 @@ def evaluate_with_bmc(
 
             except Exception as e:
                 if dist.get_rank() == 0:
-                    print(f"⚠️  BMC evaluation failed: {e}")
+                    print(f"[WARN] BMC evaluation failed: {e}")
                 bmc_scores = {
                     'consistency_score': 0.0,
                     'token_accuracy': 0.0,
@@ -348,29 +347,29 @@ def evaluate_with_bmc(
         bmc_times.append(bmc_time)
         wall_times.append(gen_time + bmc_time)
 
-        # 3. 提取答案并验证正确性
+        # 3. Extract the answer and check correctness
         for j in range(len(gt_answers)):
             generated_answer = answer_extractor(generated_texts[j])
             gt_answer = gt_answers[j]
 
-            # 🔥 针对HumanEval的详细调试
+            # Detailed debug dump for HumanEval
             if task_name == "humaneval" and dist.get_rank() == 0 and j == 0:
                 print(f"\n{'='*100}")
-                print(f"🔍 HumanEval Debug Info - Sample {j}")
+                print(f"HumanEval Debug Info - Sample {j}")
                 print(f"{'='*100}")
                 
-                print(f"\n📝 Raw Generated Text (first 1000 chars):")
+                print(f"\nRaw Generated Text (first 1000 chars):")
                 print(generated_texts[j][:1000])
                 print("\n" + "-"*100)
                 
-                print(f"\n💡 Extracted Code:")
+                print(f"\nExtracted Code:")
                 if generated_answer:
                     print(generated_answer[:800])
                 else:
-                    print("❌ EXTRACTION FAILED - returned None!")
+                    print("[ERROR] EXTRACTION FAILED - returned None!")
                 print("\n" + "-"*100)
                 
-                print(f"\n📋 Ground Truth Info:")
+                print(f"\nGround Truth Info:")
                 print(f"  Entry point: {gt_answer.get('entry_point', 'N/A')}")
                 print(f"\n  Prompt (first 300 chars):")
                 print(gt_answer.get('prompt', 'N/A')[:300])
@@ -378,45 +377,45 @@ def evaluate_with_bmc(
                 print(gt_answer.get('test', 'N/A')[:400])
                 print("\n" + "-"*100)
 
-            # 验证正确性
+            # Check correctness
             if task_name in ["sudoku", "countdown", "humaneval", "mbpp"]:
-                # 这些任务返回 (is_correct, details)
+                # These validators return (is_correct, details)
                 is_correct, validation_details = answer_validator(
                     generated_answer, gt_answer, questions[j]
                 )
             else:
-                # GSM8K 和 MATH 直接返回 bool
+                # GSM8K and MATH validators return a plain bool
                 is_correct = answer_validator(generated_answer, gt_answer)
                 validation_details = {}
 
-            # 🔥 针对HumanEval的验证结果调试
+            # Debug dump of the HumanEval validation result
             if task_name == "humaneval" and dist.get_rank() == 0 and j == 0:
-                print(f"\n🧪 Validation Result:")
+                print(f"\nValidation Result:")
                 print(f"  Test Passed: {is_correct}")
                 
                 if validation_details:
                     if 'error' in validation_details:
-                        print(f"  ❌ Error: {validation_details['error']}")
+                        print(f"  [ERROR] {validation_details['error']}")
                     if 'stderr' in validation_details and validation_details['stderr']:
-                        print(f"  ⚠️  Stderr:")
+                        print(f"  [WARN] Stderr:")
                         print(f"     {validation_details['stderr'][:500]}")
                     if 'code_preview' in validation_details:
-                        print(f"\n  📄 Final Code Used (first 400 chars):")
+                        print(f"\n  Final Code Used (first 400 chars):")
                         print(f"     {validation_details['code_preview']}")
                 
                 print(f"{'='*100}\n")
 
-            # 更新统计
+            # Update counters
             task_stats["total_samples"] += 1
             if is_correct:
                 task_stats["total_correct"] += 1
 
-            # Sudoku 特殊统计
+            # Sudoku-specific cell-level counters
             if task_name == "sudoku" and validation_details:
                 task_stats["partial_correct_cells"] += validation_details.get("correct_cells", 0)
                 task_stats["total_empty_cells"] += validation_details.get("empty_cells", 0)
 
-            # 构建结果
+            # Assemble the per-sample record
             example_result = {
                 "question": questions[j],
                 "prompt_input": prompts[j],
@@ -427,7 +426,7 @@ def evaluate_with_bmc(
                 "bmc_scores": bmc_scores_list[j],
             }
 
-            # 添加任务特定的验证详情
+            # Attach task-specific validation details
             if validation_details:
                 example_result["validation_details"] = validation_details
 
@@ -435,7 +434,7 @@ def evaluate_with_bmc(
 
         total_processed += len(generated_texts)
 
-        # 4. 打印示例
+        # 4. Print one random example from the batch
         if dist.get_rank() == 0:
             idx = random.randint(0, len(questions) - 1)
             print(f"\n{'='*60}")
@@ -449,10 +448,10 @@ def evaluate_with_bmc(
             print(f"Generated answer: {answer_extractor(generated_texts[idx])}")
             print(f"Is correct: {all_generations[-len(questions) + idx]['is_correct']}")
 
-            # BMC 信息
+            # BMC details
             if not bmc_scores_list[idx].get('skipped', False):
                 print("-" * 60)
-                print(f"🔍 BMC Evaluation:")
+                print(f"BMC Evaluation:")
                 print(f"  Consistency Score: {bmc_scores_list[idx]['consistency_score']:.4f}")
                 print(f"  Final Answer Match: {bmc_scores_list[idx]['final_answer_match']:.4f}")
                 print(f"  Number Retention: {bmc_scores_list[idx]['number_retention']:.4f}")
@@ -464,14 +463,14 @@ def evaluate_with_bmc(
                     print(f"  Sample Std: {bmc_scores_list[idx]['sample_std']:.4f}")
             print(f"{'='*60}\n")
 
-    # 计算整体准确率
+    # Compute the overall accuracy
     avg_gen_time = sum(gen_times) / len(gen_times) if gen_times else 0.0
     avg_bmc_time = sum(bmc_times) / len(bmc_times) if bmc_times else 0.0
     avg_wall_time = sum(wall_times) / len(wall_times) if wall_times else 0.0
 
-    # 🔥 修改：Sudoku使用Cell-level准确率，其他任务使用Sample-level准确率
+    # Sudoku is scored at cell level; all other tasks are scored at sample level
     if task_name == "sudoku":
-        # Cell-level准确率（与原始脚本一致）
+        # Cell-level accuracy, matching the original script
         accuracy = (
             task_stats["partial_correct_cells"] / task_stats["total_empty_cells"]
             if task_stats["total_empty_cells"] > 0
@@ -483,7 +482,7 @@ def evaluate_with_bmc(
             else 0.0
         )
     else:
-        # 其他任务使用Sample-level准确率
+        # Sample-level accuracy for the remaining tasks
         accuracy = (
             task_stats["total_correct"] / task_stats["total_samples"]
             if task_stats["total_samples"] > 0
@@ -493,7 +492,7 @@ def evaluate_with_bmc(
 
     if dist.get_rank() == 0:
         print(f"\n{'='*60}")
-        print(f"📊 Task Statistics ({task_name.upper()}):")
+        print(f"Task Statistics ({task_name.upper()}):")
         print(f"  Total samples: {task_stats['total_samples']}")
         print(f"  Correct: {task_stats['total_correct']}")
         print(f"  Accuracy: {accuracy:.2%}")
@@ -506,7 +505,7 @@ def evaluate_with_bmc(
 
         if bmc_probe is not None:
             print(f"\n{'='*60}")
-            print("⏱️  Timing Statistics:")
+            print("Timing Statistics:")
             print(f"  Generation time: {avg_gen_time:.3f}s/batch")
             print(f"  BMC time: {avg_bmc_time:.3f}s/batch")
             print(f"  Total time: {avg_wall_time:.3f}s/batch")
@@ -523,7 +522,7 @@ def evaluate_with_bmc(
         "task_stats": task_stats,
     }
 
-    # 🔥 为Sudoku添加额外的sample-level准确率
+    # Report the extra sample-level accuracy for Sudoku
     if task_name == "sudoku":
         metrics["sample_accuracy"] = sample_accuracy
 
@@ -531,9 +530,9 @@ def evaluate_with_bmc(
 
 def get_system_prompt_for_task(task_name: str) -> str:
     """
-    获取任务对应的system prompt
-    
-    这样BMC重建时可以使用相同的prompt
+    Return the system prompt associated with a task.
+
+    BMC reconstruction uses the same prompt as generation.
     """
     from datasets_unified import (
         GSM_SYSTEM_PROMPT, 
@@ -587,53 +586,53 @@ if __name__ == "__main__":
     parser.add_argument("--diffusion_steps", type=int, default=64)
     parser.add_argument("--output_dir", type=str, default="results_with_bmc_v2_unified/")
 
-    # BMC V2 参数
+    # BMC V2 parameters
     parser.add_argument("--t_probe", type=float, default=0.9,
-                       help="BMC 探测 timestep")
+                       help="BMC probing timestep")
     parser.add_argument("--num_reverse_steps", type=int, default=5,
-                       help="BMC 反向去噪步数")
+                       help="Number of BMC reverse denoising steps")
     parser.add_argument("--semantic_model_path", type=str, default=None,
-                       help="本地语义编码器路径（必需！）")
+                       help="Path to the local semantic encoder (required)")
     parser.add_argument("--skip_bmc", action="store_true",
-                       help="跳过 BMC 评估")
+                       help="Skip BMC evaluation")
 
-    # V2 新增参数
+    # Additional V2 parameters
     parser.add_argument("--adaptive_t", action="store_true",
-                       help="使用自适应 t_probe")
+                       help="Use an adaptive t_probe")
     parser.add_argument("--num_samples", type=int, default=1,
-                       help="BMC 采样次数（>=1，用于减少随机性）")
+                       help="Number of BMC samples (>=1; higher values reduce variance)")
     parser.add_argument("--aggressive_scoring", action="store_true",
-                       help="使用更激进的评分策略（如果没有优化权重）")
+                       help="Use the more aggressive scoring strategy when no optimized weights are available")
 
-    # 🔥 NEW: 优化权重支持
+    # Optimized-weight support
     parser.add_argument("--optimized_weights_path", type=str, default=None,
-                       help="优化权重文件路径（可选，自动搜索）")
+                       help="Path to an optimized weights file (optional; searched automatically)")
     parser.add_argument("--force_aggressive", action="store_true",
-                       help="强制使用aggressive_scoring，忽略优化权重")
+                       help="Force aggressive_scoring and ignore optimized weights")
 
-    # 数据集文件路径（可选）
+    # Optional dataset file paths
     parser.add_argument("--sudoku_csv_path", type=str, default=None,
-                       help="Sudoku CSV 文件路径")
+                       help="Path to the Sudoku CSV file")
     parser.add_argument("--countdown_jsonl_path", type=str, default=None,
-                       help="Countdown JSONL 文件路径")
+                       help="Path to the Countdown JSONL file")
 
     args = parser.parse_args()
     args.diffusion_steps = args.gen_length // 2
 
-    # 验证参数
+    # Validate the arguments
     if not args.skip_bmc and args.semantic_model_path is None:
         if dist.get_rank() == 0:
-            print("❌ ERROR: --semantic_model_path is required when BMC is enabled!")
+            print("[ERROR] --semantic_model_path is required when BMC is enabled!")
         cleanup_ddp()
         exit(1)
 
     if not args.skip_bmc and not os.path.exists(args.semantic_model_path):
         if dist.get_rank() == 0:
-            print(f"❌ ERROR: semantic_model_path not found: {args.semantic_model_path}")
+            print(f"[ERROR] semantic_model_path not found: {args.semantic_model_path}")
         cleanup_ddp()
         exit(1)
 
-    # 🔥 NEW: 加载优化权重
+    # Load optimized weights when available
     optimized_weights = None
     if not args.skip_bmc and not args.force_aggressive:
         if dist.get_rank() == 0:
@@ -643,9 +642,9 @@ if __name__ == "__main__":
                 verbose=True
             )
 
-        # 广播权重到所有进程
+        # Broadcast the weights to every process
         if dist.get_world_size() > 1:
-            # 将权重转为可广播的格式
+            # Wrap the weights in a list so they can be broadcast
             if optimized_weights is not None:
                 weights_list = [optimized_weights]
             else:
@@ -654,7 +653,7 @@ if __name__ == "__main__":
             dist.broadcast_object_list(weights_list, src=0)
             optimized_weights = weights_list[0]
 
-    # 加载模型
+    # Load the model
     if dist.get_rank() == 0:
         print(f"\n{'='*60}")
         print("Loading LLaDA model...")
@@ -672,7 +671,7 @@ if __name__ == "__main__":
         trust_remote_code=True
     )
 
-    # 打印 mask_token_id（支持 LLaDA-8B: 126336 和 LLaDA-MoE: 156895）
+    # Report mask_token_id (LLaDA-8B uses 126336, LLaDA-MoE uses 156895)
     mask_id = getattr(tokenizer, 'mask_token_id', None)
     if dist.get_rank() == 0:
         print(f"[Model] mask_token_id = {mask_id} (LLaDA-8B=126336, LLaDA-MoE=156895)")
@@ -689,16 +688,16 @@ if __name__ == "__main__":
             if dist.get_rank() == 0:
                 print(f"Rank {local_rank}: Parameters synchronized")
 
-    # 🔥 NEW: 获取任务对应的system prompt
+    # Fetch the system prompt that matches the task
     task_system_prompt = get_system_prompt_for_task(args.dataset)
     
     if dist.get_rank() == 0 and task_system_prompt:
         print(f"\n{'='*60}")
-        print("📝 Task System Prompt (前100字符):")
+        print("Task System Prompt (first 100 chars):")
         print(f"{task_system_prompt[:100]}...")
         print(f"{'='*60}\n")
 
-    # 初始化 BMC V2 探针
+    # Initialize the BMC V2 probe
     bmc_probe = None
     if not args.skip_bmc:
         if dist.get_rank() == 0:
@@ -707,11 +706,11 @@ if __name__ == "__main__":
             print(f"Semantic model: {args.semantic_model_path}")
             print(f"Adaptive t_probe: {args.adaptive_t}")
             print(f"Num samples: {args.num_samples}")
-            print(f"🔥 Using Chat Template: True")  # 🔥 NEW
-            print(f"🔥 System Prompt: {'Loaded' if task_system_prompt else 'Not available'}")  # 🔥 NEW
+            print(f"Using Chat Template: True")
+            print(f"System Prompt: {'Loaded' if task_system_prompt else 'Not available'}")
 
             if optimized_weights:
-                print(f"✅ Using OPTIMIZED WEIGHTS")
+                print(f"Using OPTIMIZED WEIGHTS")
             elif args.aggressive_scoring:
                 print(f"Using aggressive scoring")
             else:
@@ -720,7 +719,7 @@ if __name__ == "__main__":
             print("="*60)
 
         try:
-            # 🔥 获取任务配置用于BMC
+            # Task configuration consumed by BMC
             task_config = get_task_config(args.dataset)
             
             bmc_probe = BMCEstimator(
@@ -734,35 +733,35 @@ if __name__ == "__main__":
                 optimized_weights=optimized_weights,
                 task_name=args.dataset,
                 task_config=task_config,
-                system_prompt=task_system_prompt,  # 🔥 NEW: 传入system prompt
-                use_chat_template=True  # 🔥 NEW: 启用chat template
+                system_prompt=task_system_prompt,
+                use_chat_template=True
             )
 
             if dist.get_rank() == 0:
-                print(f"✓ BMC V2 initialized with base t_probe={args.t_probe}")
+                print(f"[OK] BMC V2 initialized with base t_probe={args.t_probe}")
                 print("="*60 + "\n")
         except Exception as e:
             if dist.get_rank() == 0:
-                print(f"❌ BMC initialization failed: {e}")
+                print(f"[ERROR] BMC initialization failed: {e}")
                 print("Continuing without BMC...")
             bmc_probe = None
     else:
         if dist.get_rank() == 0:
-            print("⚠️  BMC evaluation skipped")
+            print("[WARN] BMC evaluation skipped")
 
-    # 准备数据集（使用统一接口）
+    # Prepare the dataset through the unified interface
     num_evals = {
-        "gsm8k": -1,      # -1 表示使用全部数据
+        "gsm8k": -1,      # -1 means use the full dataset
         "math": -1,
         "countdown": 256,
         "sudoku": 256,
-        "humaneval": -1,  # HumanEval: 164个问题
-        "mbpp": -1,       # MBPP: ~500个问题
-        "aime": -1,       # AIME: 30个问题（AIME2024）
-        "olympic": -1,    # Olympic: 数量取决于数据集
-        "gpqa": -1,       # GPQA: 数量取决于子集
-        "logiqa": -1,     # LogiQA: 626个问题
-        "arc": -1,        # ARC: 1172个问题（ARC-Challenge）
+        "humaneval": -1,  # HumanEval: 164 problems
+        "mbpp": -1,       # MBPP: ~500 problems
+        "aime": -1,       # AIME: 30 problems (AIME2024)
+        "olympic": -1,    # Olympic: size depends on the dataset
+        "gpqa": -1,       # GPQA: size depends on the subset
+        "logiqa": -1,     # LogiQA: 626 problems
+        "arc": -1,        # ARC: 1172 problems (ARC-Challenge)
     }
 
     dataset_kwargs = {
@@ -772,7 +771,7 @@ if __name__ == "__main__":
         "add_reasoning": True,
     }
 
-    # 添加任务特定的路径参数
+    # Add task-specific file paths
     if args.dataset == "sudoku" and args.sudoku_csv_path:
         dataset_kwargs["sudoku_csv_path"] = args.sudoku_csv_path
     elif args.dataset == "countdown" and args.countdown_jsonl_path:
@@ -787,7 +786,7 @@ if __name__ == "__main__":
         collate_fn=dataset.collate_fn,
     )
 
-    # 构建输出文件名
+    # Build the output filename
     if len(args.checkpoint_path):
         model_name = args.checkpoint_path.split("/")
         model_name = model_name[-2] + "_" + model_name[-1]
@@ -801,7 +800,7 @@ if __name__ == "__main__":
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # V2 文件名
+    # V2 filename suffix
     if not args.skip_bmc:
         bmc_suffix = f"_bmc_v2_t{args.t_probe}_rs{args.num_reverse_steps}"
         if args.adaptive_t:
@@ -809,7 +808,7 @@ if __name__ == "__main__":
         if args.num_samples > 1:
             bmc_suffix += f"_ns{args.num_samples}"
         if optimized_weights:
-            bmc_suffix += "_optimized"  # 🔥 标记使用优化权重
+            bmc_suffix += "_optimized"  # mark runs that used optimized weights
         elif args.aggressive_scoring:
             bmc_suffix += "_aggressive"
     else:
@@ -823,13 +822,13 @@ if __name__ == "__main__":
     if dist.get_rank() == 0:
         print(f"Saving results to: {filename}")
 
-    # 运行评估
+    # Run the evaluation
     metrics = evaluate_with_bmc(
         model,
         tokenizer,
         dataloader,
         bmc_probe,
-        args.dataset,  # 传入任务名称
+        args.dataset,
         gen_length=args.gen_length,
         block_length=args.block_length,
         steps=args.diffusion_steps,
@@ -837,9 +836,9 @@ if __name__ == "__main__":
         num_reverse_steps=args.num_reverse_steps,
     )
 
-    # 保存结果
+    # Save the results
     with open(filename, "w") as f:
-        # 🔥 先构建基础数据
+        # Build the base payload first
         save_data = {
             "generations": metrics["generations"],
             "metrics": {
@@ -856,7 +855,7 @@ if __name__ == "__main__":
             "diffusion_steps": args.diffusion_steps,
             "block_length": args.block_length,
             "task_name": args.dataset,
-            # BMC V2 配置
+            # BMC V2 configuration
             "bmc_config": {
                 "enabled": not args.skip_bmc,
                 "version": "v2",
@@ -871,13 +870,13 @@ if __name__ == "__main__":
             }
         }
 
-        # 🔥 如果是Sudoku任务，添加额外的sample-level准确率
+        # Sudoku additionally reports sample-level accuracy
         if args.dataset == "sudoku":
             save_data["metrics"]["sample_accuracy"] = metrics.get("sample_accuracy", 0.0)
-            # 也可以添加说明
+            # Document what each accuracy field means
             save_data["metrics"]["accuracy_note"] = "accuracy is cell-level, sample_accuracy is sample-level (perfect match)"
 
-        # 保存到文件
+        # Write the payload to disk
         json.dump(save_data, f, indent=2)
 
     cleanup_ddp()

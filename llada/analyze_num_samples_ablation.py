@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Ensemble Size消融实验分析
-分析不同NUM_SAMPLES (ensemble size N)的影响
+Ensemble size ablation analysis.
+Studies the effect of different NUM_SAMPLES values (ensemble size N).
 """
 import argparse
 import json
@@ -16,7 +16,7 @@ from typing import Dict, List
 
 
 def load_timing_data(result_base_dir: str) -> Dict[int, float]:
-    """加载推理时间数据"""
+    """Load the inference timing data."""
     timing_file = os.path.join(result_base_dir, "timing_results.csv")
     timing_dict = {}
     
@@ -29,18 +29,18 @@ def load_timing_data(result_base_dir: str) -> Dict[int, float]:
                     time_sec = float(row['inference_time_seconds'])
                     timing_dict[num_samples] = time_sec
         except Exception as e:
-            print(f"⚠️  Failed to load timing data: {e}")
+            print(f"[WARN] Failed to load timing data: {e}")
     
     return timing_dict
 
 
 def load_results_from_dir(result_dir: str) -> Dict:
-    """加载单个实验目录的所有GPU结果"""
+    """Load the results from all GPU shards in a single experiment directory."""
     pattern = os.path.join(result_dir, "*_generations.json")
     files = glob.glob(pattern)
     
     if not files:
-        print(f"⚠️  No result files found in {result_dir}")
+        print(f"[WARN] No result files found in {result_dir}")
         return None
     
     all_generations = []
@@ -57,7 +57,7 @@ def load_results_from_dir(result_dir: str) -> Dict:
                 if bmc_config is None and 'bmc_config' in data:
                     bmc_config = data['bmc_config']
         except Exception as e:
-            print(f"⚠️  Error loading {filepath}: {e}")
+            print(f"[WARN] Error loading {filepath}: {e}")
             continue
     
     if not all_generations:
@@ -71,7 +71,7 @@ def load_results_from_dir(result_dir: str) -> Dict:
 
 
 def compute_metrics(generations: List[Dict]) -> Dict:
-    """计算评估指标"""
+    """Compute the evaluation metrics."""
     if not generations:
         return {}
     
@@ -81,7 +81,7 @@ def compute_metrics(generations: List[Dict]) -> Dict:
     
     bmc_scores = []
     labels = []
-    sample_stds = []  # 记录采样标准差
+    sample_stds = []  # Per-sample standard deviation across the ensemble
     
     for gen in generations:
         if 'bmc_scores' in gen and 'consistency_score' in gen['bmc_scores']:
@@ -89,7 +89,7 @@ def compute_metrics(generations: List[Dict]) -> Dict:
                 bmc_scores.append(gen['bmc_scores']['consistency_score'])
                 labels.append(1 if gen['is_correct'] else 0)
                 
-                # 获取sample_std（如果有）
+                # Collect sample_std when available
                 if 'sample_std' in gen['bmc_scores']:
                     sample_stds.append(gen['bmc_scores']['sample_std'])
     
@@ -100,7 +100,7 @@ def compute_metrics(generations: List[Dict]) -> Dict:
         'bmc_samples': len(bmc_scores),
     }
     
-    # 记录平均sample_std
+    # Record the mean sample_std
     if sample_stds:
         metrics['avg_sample_std'] = np.mean(sample_stds)
     
@@ -122,7 +122,7 @@ def compute_metrics(generations: List[Dict]) -> Dict:
                             (np.mean(wrong_scores) if wrong_scores else 0.0),
             })
         except Exception as e:
-            print(f"⚠️  Error computing AUC: {e}")
+            print(f"[WARN] Error computing AUC: {e}")
             metrics.update({'roc_auc': -1, 'pr_auc': -1, 'score_gap': 0.0})
     else:
         metrics.update({'roc_auc': -1, 'pr_auc': -1, 'score_gap': 0.0})
@@ -131,35 +131,35 @@ def compute_metrics(generations: List[Dict]) -> Dict:
 
 
 def plot_diminishing_returns(results: List[Dict], output_dir: str):
-    """绘制收益递减曲线"""
+    """Plot the diminishing-returns curve."""
     n_values = [r['N'] for r in results if r['AUROC'] is not None]
     auroc_values = [r['AUROC'] for r in results if r['AUROC'] is not None]
     
     if len(n_values) < 2:
-        print("⚠️  Not enough data points for plotting")
+        print("[WARN] Not enough data points for plotting")
         return
     
     plt.figure(figsize=(10, 6))
     
-    # 主曲线
+    # Main curve
     plt.plot(n_values, auroc_values, 'o-', linewidth=2.5, markersize=10, 
              color='#1976d2', label='Detection AUC')
     
-    # 标注最大值
+    # Mark the maximum
     max_auc = max(auroc_values)
     max_n = n_values[auroc_values.index(max_auc)]
     plt.axhline(y=max_auc, color='red', linestyle='--', alpha=0.5, 
                 label=f'Max AUC ({max_auc:.3f})')
     
-    # 标注收益递减区域
+    # Mark the diminishing-returns region
     if len(n_values) >= 3:
-        # 找拐点（增益<1%的位置）
+        # Find the knee point (where the relative gain drops below 1%)
         improvements = []
         for i in range(1, len(auroc_values)):
             improve = (auroc_values[i] - auroc_values[i-1]) / auroc_values[i-1] * 100
             improvements.append(improve)
         
-        # 找到第一个<1%的点
+        # Locate the first point below 1%
         diminish_idx = None
         for i, imp in enumerate(improvements):
             if imp < 1.0:
@@ -174,7 +174,7 @@ def plot_diminishing_returns(results: List[Dict], output_dir: str):
                     'Diminishing\nReturns', fontsize=10, 
                     bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
     
-    # 标注每个点的提升百分比
+    # Annotate the relative improvement between consecutive points
     for i in range(1, len(n_values)):
         improve = (auroc_values[i] - auroc_values[i-1]) / auroc_values[i-1] * 100
         mid_x = (n_values[i] + n_values[i-1]) / 2
@@ -190,37 +190,37 @@ def plot_diminishing_returns(results: List[Dict], output_dir: str):
     plt.grid(alpha=0.3)
     plt.legend(fontsize=11)
     
-    # 设置x轴刻度
+    # Set the x-axis ticks
     plt.xticks(n_values)
     
     plt.tight_layout()
     
-    # 保存图片
+    # Save the figure
     output_file = os.path.join(output_dir, 'ensemble_size_curve.pdf')
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
-    print(f"\n📊 Plot saved to: {output_file}")
+    print(f"\nPlot saved to: {output_file}")
     
-    # 也保存PNG版本
+    # Also save a PNG version
     output_file_png = os.path.join(output_dir, 'ensemble_size_curve.png')
     plt.savefig(output_file_png, dpi=300, bbox_inches='tight')
-    print(f"📊 Plot (PNG) saved to: {output_file_png}")
+    print(f"Plot (PNG) saved to: {output_file_png}")
 
 
 def analyze_num_samples_ablation(result_base_dir: str):
-    """分析Ensemble Size消融实验"""
+    """Analyze the ensemble size ablation experiment."""
     
     print("\n" + "="*80)
-    print("🔬 Ensemble Size Ablation - NUM_SAMPLES Analysis")
+    print("Ensemble Size Ablation - NUM_SAMPLES Analysis")
     print("="*80)
     
-    # 加载timing数据
+    # Load the timing data
     timing_dict = load_timing_data(result_base_dir)
     
-    # 搜索所有num_samples目录
+    # Find all num_samples directories
     num_samples_dirs = sorted(glob.glob(os.path.join(result_base_dir, "num_samples_*")))
     
     if not num_samples_dirs:
-        print(f"❌ No num_samples directories found in {result_base_dir}")
+        print(f"[ERROR] No num_samples directories found in {result_base_dir}")
         return
     
     results = []
@@ -230,20 +230,20 @@ def analyze_num_samples_ablation(result_base_dir: str):
         try:
             num_samples = int(dir_name.split('_')[-1])
         except:
-            print(f"⚠️  Cannot parse num_samples from {dir_name}")
+            print(f"[WARN] Cannot parse num_samples from {dir_name}")
             continue
         
-        print(f"\n📊 Analyzing: N = {num_samples}")
+        print(f"\nAnalyzing: N = {num_samples}")
         print(f"   Path: {exp_dir}")
         
         data = load_results_from_dir(exp_dir)
         if data is None:
-            print(f"   ❌ Failed to load results")
+            print(f"   [ERROR] Failed to load results")
             continue
         
         metrics = compute_metrics(data['generations'])
         if not metrics:
-            print(f"   ❌ Failed to compute metrics")
+            print(f"   [ERROR] Failed to compute metrics")
             continue
         
         inference_time = timing_dict.get(num_samples, None)
@@ -271,15 +271,15 @@ def analyze_num_samples_ablation(result_base_dir: str):
         })
     
     if not results:
-        print("\n❌ No valid results")
+        print("\n[ERROR] No valid results")
         return
     
-    # 按N排序
+    # Sort by N
     results = sorted(results, key=lambda x: x['N'])
     df = pd.DataFrame(results)
     
     print("\n" + "="*80)
-    print("📋 Summary Table")
+    print("Summary Table")
     print("="*80)
     
     display_df = df.copy()
@@ -293,19 +293,19 @@ def analyze_num_samples_ablation(result_base_dir: str):
     print(display_df[['N', 'AUROC', 'AUPR']].to_string(index=False))
     print("="*80)
     
-    # 保存结果
+    # Save the results
     csv_file = os.path.join(result_base_dir, "num_samples_ablation_summary.csv")
     df.to_csv(csv_file, index=False)
-    print(f"\n💾 Summary saved to: {csv_file}")
+    print(f"\nSummary saved to: {csv_file}")
     
     json_file = os.path.join(result_base_dir, "num_samples_ablation_summary.json")
     with open(json_file, 'w') as f:
         json.dump(results, f, indent=2)
-    print(f"💾 Detailed results saved to: {json_file}")
+    print(f"Detailed results saved to: {json_file}")
     
-    # Notion格式表格
+    # Notion-formatted table
     print("\n" + "="*80)
-    print("📝 Notion Table Format (Copy & Paste)")
+    print("Notion Table Format (Copy & Paste)")
     print("="*80)
     print("\n```")
     print("| N | AUROC | AUPR |")
@@ -317,13 +317,13 @@ def analyze_num_samples_ablation(result_base_dir: str):
     print("```")
     print("="*80)
     
-    # 找最佳配置
+    # Find the best configuration
     valid_results = [r for r in results if r['AUROC'] is not None]
     if valid_results:
         best = max(valid_results, key=lambda x: x['AUROC'])
         
         print("\n" + "="*80)
-        print("🏆 Best Configuration")
+        print("Best Configuration")
         print("="*80)
         print(f"Ensemble Size (N): {best['N']}")
         print(f"AUROC: {best['AUROC']:.4f}")
@@ -333,9 +333,9 @@ def analyze_num_samples_ablation(result_base_dir: str):
             print(f"Avg Sample Std: {best['Avg_Sample_Std']:.4f}")
         print("="*80)
         
-        # 分析收益递减
+        # Diminishing-returns analysis
         print("\n" + "="*80)
-        print("📈 Diminishing Returns Analysis")
+        print("Diminishing Returns Analysis")
         print("="*80)
         for i in range(1, len(valid_results)):
             prev = valid_results[i-1]
@@ -345,11 +345,11 @@ def analyze_num_samples_ablation(result_base_dir: str):
                   f"+{improve:.2f}% (from {prev['AUROC']:.4f} to {curr['AUROC']:.4f})")
         print("="*80)
     
-    # 绘制曲线
+    # Plot the curve
     try:
         plot_diminishing_returns(results, result_base_dir)
     except Exception as e:
-        print(f"\n⚠️  Failed to generate plot: {e}")
+        print(f"\n[WARN] Failed to generate plot: {e}")
 
 
 def main():
@@ -366,11 +366,11 @@ def main():
     args = parser.parse_args()
     
     if not os.path.exists(args.result_dir):
-        print(f"❌ Result directory not found: {args.result_dir}")
+        print(f"[ERROR] Result directory not found: {args.result_dir}")
         return
     
     analyze_num_samples_ablation(args.result_dir)
-    print("\n✅ Analysis complete!")
+    print("\nAnalysis complete!")
 
 
 if __name__ == "__main__":

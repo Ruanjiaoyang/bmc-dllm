@@ -88,10 +88,10 @@ validate_model() {
     local path="$1"
     local name="$2"
     if [ ! -d "$path" ]; then
-        echo "❌ Model not found: $path ($name)"
+        echo "[ERROR] Model not found: $path ($name)"
         return 1
     fi
-    echo "✅ Found: $path ($name)"
+    echo "[OK] Found: $path ($name)"
 }
 
 # ============================================================
@@ -104,7 +104,7 @@ run_model() {
 
     echo ""
     echo "========================================================================"
-    echo "🚀 Running: $model_name"
+    echo "Running: $model_name"
     echo "========================================================================"
     echo "Model:  $model_path"
     echo "Output: $output_dir"
@@ -147,9 +147,9 @@ run_model() {
     eval $CMD
 
     if [ $? -eq 0 ]; then
-        echo "✅ Completed: $model_name"
+        echo "[OK] Completed: $model_name"
     else
-        echo "❌ Failed: $model_name"
+        echo "[ERROR] Failed: $model_name"
         return 1
     fi
     echo "------------------------------------------------------------------------"
@@ -176,7 +176,7 @@ elif [ "$TARGET" = "mini" ]; then
     run_model "$MINI_MODEL_PATH" "$OUTPUT_DIR_MINI" "LLaDA2.1-mini"
 
 else
-    echo "❌ Unknown target: $TARGET"
+    echo "[ERROR] Unknown target: $TARGET"
     echo "Usage: $0 [all|moe|mini] [gpu_ids] [subsample]"
     echo "  all       — run both models (default)"
     echo "  moe       — run LLaDA-MoE-7B-A1B-Instruct only"
@@ -191,7 +191,7 @@ fi
 # ============================================================
 echo ""
 echo "========================================================================"
-echo "✅ All Experiments Complete!"
+echo "All Experiments Complete!"
 echo "========================================================================"
 echo ""
 echo "Output directories:"

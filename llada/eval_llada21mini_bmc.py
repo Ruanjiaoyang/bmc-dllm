@@ -107,7 +107,7 @@ def load_optimized_weights(task_name=None, weights_path=None, verbose=True):
     if weights_path:
         if not os.path.exists(weights_path):
             if verbose:
-                print(f"⚠️  指定的权重文件不存在: {weights_path}")
+                print(f"[WARN] Specified weights file does not exist: {weights_path}")
             return None
 
         try:
@@ -126,18 +126,18 @@ def load_optimized_weights(task_name=None, weights_path=None, verbose=True):
                 metrics = best_result['metrics']
             else:
                 if verbose:
-                    print(f"⚠️  权重文件格式不正确: {weights_path}")
+                    print(f"[WARN] Unrecognized weights file format: {weights_path}")
                 return None
 
             if verbose:
                 print(f"\n{'='*60}")
-                print(f"✅ 已加载优化权重")
+                print(f"[OK] Loaded optimized weights")
                 print(f"{'='*60}")
-                print(f"文件: {weights_path}")
-                print(f"方法: {method}")
+                print(f"File: {weights_path}")
+                print(f"Method: {method}")
                 print(f"ROC-AUC: {metrics.get('roc_auc', 0):.4f}")
                 print(f"Score Gap: {metrics.get('score_gap', 0):.4f}")
-                print(f"\n权重配置:")
+                print(f"\nWeight configuration:")
                 for feat, weight in sorted(weights.items(), key=lambda x: -x[1]):
                     print(f"  {feat:25s}: {weight:.4f}")
                 print(f"{'='*60}\n")
@@ -146,7 +146,7 @@ def load_optimized_weights(task_name=None, weights_path=None, verbose=True):
 
         except Exception as e:
             if verbose:
-                print(f"⚠️  加载权重文件失败: {e}")
+                print(f"[WARN] Failed to load weights file: {e}")
             return None
 
     if task_name:
@@ -185,11 +185,11 @@ def load_optimized_weights(task_name=None, weights_path=None, verbose=True):
 
         if best_file:
             if verbose:
-                print(f"🔍 自动发现最佳权重: {best_file}")
+                print(f"[INFO] Auto-detected best weights: {best_file}")
             return load_optimized_weights(task_name, best_file, verbose)
 
     if verbose:
-        print(f"ℹ️  未找到优化权重，将使用默认aggressive_scoring策略")
+        print(f"[INFO] No optimized weights found; falling back to the default aggressive_scoring strategy")
 
     return None
 
@@ -873,7 +873,7 @@ def evaluate_with_bmc(
                 }
             except Exception as e:
                 if dist.get_rank() == 0:
-                    print(f"⚠️  BMC scoring failed: {e}")
+                    print(f"[WARN] BMC scoring failed: {e}")
                 bmc_scores = {
                     'consistency_score': 0.0,
                     'token_accuracy': 0.0,
@@ -943,7 +943,7 @@ def evaluate_with_bmc(
 
             if not bmc_scores_list[idx].get('skipped', False):
                 print("-" * 60)
-                print(f"🔍 BMC Consistency Score: {bmc_scores_list[idx]['consistency_score']:.4f}")
+                print(f"BMC Consistency Score: {bmc_scores_list[idx]['consistency_score']:.4f}")
                 print(f"  Token Accuracy: {bmc_scores_list[idx]['token_accuracy']:.4f}")
                 print(f"  Number Retention: {bmc_scores_list[idx]['number_retention']:.4f}")
                 print(f"  Final Answer Match: {bmc_scores_list[idx]['final_answer_match']:.4f}")
@@ -973,7 +973,7 @@ def evaluate_with_bmc(
 
     if dist.get_rank() == 0:
         print(f"\n{'='*60}")
-        print(f"📊 Task Statistics ({task_name.upper()}):")
+        print(f"Task Statistics ({task_name.upper()}):")
         print(f"  Total samples: {task_stats['total_samples']}")
         print(f"  Correct: {task_stats['total_correct']}")
         print(f"  Accuracy: {accuracy:.2%}")
@@ -981,7 +981,7 @@ def evaluate_with_bmc(
             partial = task_stats["partial_correct_cells"] / max(1, task_stats["total_empty_cells"])
             print(f"  Cell accuracy: {partial:.2%}")
         print(f"{'='*60}")
-        print(f"\n⏱️  Timing:")
+        print(f"\nTiming:")
         print(f"  Generation: {avg_gen_time:.3f}s/batch")
         print(f"  BMC scoring: {avg_bmc_time:.3f}s/batch")
         print(f"  Total: {avg_wall_time:.3f}s/batch")
@@ -1071,12 +1071,12 @@ if __name__ == "__main__":
     # Validate BMC
     if not args.skip_bmc and args.semantic_model_path is None:
         if dist.get_rank() == 0:
-            print("❌ WARNING: --semantic_model_path not provided, semantic similarity will be 0")
+            print("[WARN] --semantic_model_path not provided, semantic similarity will be 0")
         args.skip_bmc = True
 
     if not args.skip_bmc and args.semantic_model_path and not os.path.exists(args.semantic_model_path):
         if dist.get_rank() == 0:
-            print(f"❌ WARNING: semantic_model_path not found: {args.semantic_model_path}")
+            print(f"[WARN] semantic_model_path not found: {args.semantic_model_path}")
         args.skip_bmc = True
 
     # Load optimized weights
@@ -1281,7 +1281,7 @@ if __name__ == "__main__":
     task_system_prompt = get_system_prompt_for_task(args.dataset)
     if dist.get_rank() == 0 and task_system_prompt:
         print(f"\n{'='*60}")
-        print(f"📝 Task System Prompt (前100字符):")
+        print(f"Task System Prompt (first 100 chars):")
         print(f"{task_system_prompt[:100]}...")
         print(f"{'='*60}\n")
 
@@ -1298,7 +1298,7 @@ if __name__ == "__main__":
             print(f"  Generation threshold: {args.threshold}")
             print(f"  Editing threshold: {args.editing_threshold}")
             if optimized_weights:
-                print(f"  ✅ Using OPTIMIZED weights")
+                print(f"  [OK] Using OPTIMIZED weights")
             elif args.aggressive_scoring:
                 print(f"  Using aggressive scoring")
             print(f"{'='*60}\n")
@@ -1318,10 +1318,10 @@ if __name__ == "__main__":
                 task_config=task_config,
             )
             if dist.get_rank() == 0:
-                print(f"✅ Post-hoc BMC initialized\n")
+                print(f"[OK] Post-hoc BMC initialized\n")
         except Exception as e:
             if dist.get_rank() == 0:
-                print(f"❌ BMC init failed: {e}")
+                print(f"[ERROR] BMC init failed: {e}")
                 import traceback
                 traceback.print_exc()
             bmc_scorer = None
@@ -1443,7 +1443,7 @@ if __name__ == "__main__":
         json.dump(save_data, f, indent=2)
 
     if dist.get_rank() == 0:
-        print(f"\n✅ Evaluation complete!")
+        print(f"\n[OK] Evaluation complete!")
         print(f"Results saved to: {filename}")
 
     cleanup_ddp()

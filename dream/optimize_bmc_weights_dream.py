@@ -1,16 +1,16 @@
 """
-🔬 Dream BMC 权重优化工具（修复版）
-自动搜索最佳的 consistency_score 计算权重
+Dream BMC weight optimization tool
+Automatically searches for the best weights used to compute consistency_score
 
-修复：
-- ✅ 解决 NumPy 类型 JSON 序列化问题
-- ✅ 添加类型转换辅助函数
+Notes:
+- Handles JSON serialization of NumPy scalar types
+- Provides a type conversion helper for that purpose
 
-支持的优化方法：
-1. Grid Search - 网格搜索
-2. Bayesian Optimization - 贝叶斯优化（推荐）
-3. XGBoost - 机器学习分类器
-4. Logistic Regression - 可解释线性模型
+Supported optimization methods:
+1. Grid Search - random grid search
+2. Bayesian Optimization - recommended
+3. XGBoost - gradient boosted classifier
+4. Logistic Regression - interpretable linear model
 """
 
 import json
@@ -32,20 +32,20 @@ from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# 尝试导入可选依赖
+# Optional dependencies
 try:
     import xgboost as xgb
     HAS_XGBOOST = True
 except ImportError:
     HAS_XGBOOST = False
-    print("⚠️  XGBoost not available. Install with: pip install xgboost")
+    print("[WARN] XGBoost not available. Install with: pip install xgboost")
 
 try:
     from bayes_opt import BayesianOptimization
     HAS_BAYESOPT = True
 except ImportError:
     HAS_BAYESOPT = False
-    print("⚠️  Bayesian Optimization not available. Install with: pip install bayesian-optimization")
+    print("[WARN] Bayesian Optimization not available. Install with: pip install bayesian-optimization")
 
 try:
     import shap
@@ -55,19 +55,19 @@ except ImportError:
 
 
 # ============================================================
-# 辅助函数：类型转换
+# Helper: type conversion
 # ============================================================
 
 def convert_to_native_types(obj: Any) -> Any:
     """
-    递归转换 numpy 类型为 Python 原生类型
-    用于 JSON 序列化
-    
+    Recursively convert numpy types to native Python types
+    so the result can be JSON serialized.
+
     Args:
-        obj: 任意对象
-        
+        obj: Any object
+
     Returns:
-        转换后的对象（Python 原生类型）
+        The converted object using native Python types
     """
     if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
         return int(obj)
@@ -86,13 +86,13 @@ def convert_to_native_types(obj: Any) -> Any:
 
 
 class DreamBMCWeightOptimizer:
-    """Dream BMC 权重优化器"""
+    """Dream BMC weight optimizer"""
 
     def __init__(self, results_pattern: str, task_name: str = "gsm8k"):
         """
         Args:
-            results_pattern: 结果文件匹配模式
-            task_name: 任务名称
+            results_pattern: Glob pattern matching the result files
+            task_name: Task name
         """
         self.task_name = task_name
         self.data = self._load_data(results_pattern)
@@ -101,24 +101,24 @@ class DreamBMCWeightOptimizer:
             raise ValueError("No valid data loaded!")
 
         print(f"\n{'=' * 60}")
-        print(f"📊 Data Summary ({task_name.upper()})")
+        print(f"Data Summary ({task_name.upper()})")
         print(f"{'=' * 60}")
         print(f"Total samples: {len(self.data)}")
         print(f"Correct samples: {sum(d['label'] for d in self.data)}")
         print(f"Wrong samples: {sum(1 - d['label'] for d in self.data)}")
 
-        # 提取特征和标签
+        # Extract features and labels
         self.X, self.y, self.feature_names = self._extract_features()
 
         print(f"\nFeatures used: {self.feature_names}")
         print(f"{'=' * 60}\n")
 
     def _load_data(self, pattern: str) -> List[Dict]:
-        """加载 BMC 结果数据"""
+        """Load BMC result data."""
         files = glob.glob(pattern)
         all_samples = []
 
-        print(f"\n🔍 Loading data from: {pattern}")
+        print(f"\nLoading data from: {pattern}")
         print(f"Found {len(files)} files")
 
         for file in files:
@@ -130,14 +130,14 @@ class DreamBMCWeightOptimizer:
                     for item in generations:
                         bmc_scores = item.get('bmc_scores', {})
 
-                        # 跳过无效样本
+                        # Skip invalid samples
                         if bmc_scores.get('skipped', False) or 'error' in bmc_scores:
                             continue
 
                         if bmc_scores.get('consistency_score', -1) < 0:
                             continue
 
-                        # 获取标签
+                        # Read the correctness label
                         is_correct = item.get('is_correct', False)
 
                         sample = {
@@ -151,7 +151,7 @@ class DreamBMCWeightOptimizer:
                             'current_score': bmc_scores.get('consistency_score', 0.0),
                         }
 
-                        # 清理 NaN 值
+                        # Replace NaN/Inf values with zeros
                         for key, value in sample.items():
                             if key != 'label':
                                 if not isinstance(value, (int, float)) or np.isnan(value) or np.isinf(value):
@@ -160,25 +160,25 @@ class DreamBMCWeightOptimizer:
                         all_samples.append(sample)
 
             except Exception as e:
-                print(f"⚠️  Error loading {file}: {e}")
+                print(f"[WARN] Error loading {file}: {e}")
 
-        print(f"✓ Loaded {len(all_samples)} valid samples")
+        print(f"[OK] Loaded {len(all_samples)} valid samples")
 
-        # 数据验证
+        # Validate the loaded data
         if len(all_samples) > 0:
             labels = [s['label'] for s in all_samples]
             unique_labels = set(labels)
             if len(unique_labels) < 2:
-                print(f"⚠️  Warning: Only {len(unique_labels)} class found in data!")
+                print(f"[WARN] Warning: Only {len(unique_labels)} class found in data!")
             else:
-                print(f"✓ Found {len(unique_labels)} classes: {unique_labels}")
+                print(f"[OK] Found {len(unique_labels)} classes: {unique_labels}")
                 print(f"  - Class 1 (correct): {sum(labels)}")
                 print(f"  - Class 0 (wrong): {len(labels) - sum(labels)}")
 
         return all_samples
 
     def _extract_features(self) -> Tuple[np.ndarray, np.ndarray, List[str]]:
-        """提取特征矩阵"""
+        """Build the feature matrix."""
         feature_names = [
             'token_accuracy',
             'semantic_similarity',
@@ -195,20 +195,20 @@ class DreamBMCWeightOptimizer:
 
     def compute_weighted_score(self, weights: Dict[str, float]) -> np.ndarray:
         """
-        根据权重计算一致性分数（简单线性组合）
+        Compute the consistency score as a simple linear combination of features.
 
         Args:
-            weights: 特征权重字典
+            weights: Dict mapping feature name to weight
         """
         scores = []
 
         for sample in self.data:
             try:
-                # 简单线性组合
+                # Simple linear combination
                 score = sum(weights.get(fn, 0.0) * sample.get(fn, 0.0)
                             for fn in self.feature_names)
 
-                # 确保分数有效
+                # Guard against invalid scores
                 if np.isnan(score) or np.isinf(score):
                     score = 0.0
 
@@ -220,8 +220,8 @@ class DreamBMCWeightOptimizer:
         return np.array(scores)
 
     def evaluate_weights(self, scores: np.ndarray) -> Dict[str, float]:
-        """评估权重的效果"""
-        # 检查输入有效性
+        """Evaluate how well a set of weights separates correct from wrong answers."""
+        # Validate the input scores
         if len(scores) == 0 or np.any(np.isnan(scores)) or np.any(np.isinf(scores)):
             return {
                 'roc_auc': 0.5,
@@ -235,7 +235,7 @@ class DreamBMCWeightOptimizer:
                 'std_wrong': 0.0,
             }
 
-        # 计算 ROC-AUC
+        # Compute ROC-AUC
         try:
             if len(np.unique(self.y)) < 2:
                 roc_auc = 0.5
@@ -246,7 +246,7 @@ class DreamBMCWeightOptimizer:
         except Exception as e:
             roc_auc = 0.5
 
-        # 计算 PR-AUC
+        # Compute PR-AUC
         try:
             if len(np.unique(self.y)) < 2:
                 pr_auc = 0.5
@@ -258,11 +258,11 @@ class DreamBMCWeightOptimizer:
         except Exception as e:
             pr_auc = 0.5
 
-        # 分离正确和错误样本的分数
+        # Split scores by correctness
         correct_scores = scores[self.y == 1]
         wrong_scores = scores[self.y == 0]
 
-        # 计算分数差距
+        # Compute the score gap
         if len(correct_scores) > 0 and len(wrong_scores) > 0:
             mean_correct = np.mean(correct_scores)
             mean_wrong = np.mean(wrong_scores)
@@ -276,7 +276,7 @@ class DreamBMCWeightOptimizer:
             std_correct = 0.0
             std_wrong = 0.0
 
-        # 找最佳阈值
+        # Search for the best decision threshold
         best_acc = 0.0
         best_threshold = 0.5
         for threshold in np.linspace(0, 1, 101):
@@ -299,18 +299,18 @@ class DreamBMCWeightOptimizer:
         }
 
     # ============================================================
-    # 方法1: 网格搜索
+    # Method 1: Grid search
     # ============================================================
 
     def grid_search(self, n_samples: int = 2000) -> Dict:
         """
-        网格搜索最优权重
+        Search for the best weights with a randomized grid search.
 
         Args:
-            n_samples: 随机采样的权重组合数量
+            n_samples: Number of random weight combinations to sample
         """
         print(f"\n{'=' * 60}")
-        print("🔍 Method 1: Grid Search")
+        print("Method 1: Grid Search")
         print(f"{'=' * 60}")
         print(f"Searching {n_samples} random weight combinations...")
 
@@ -321,11 +321,11 @@ class DreamBMCWeightOptimizer:
         np.random.seed(42)
 
         for i in range(n_samples):
-            # 随机生成权重（和为1）
+            # Draw random weights that sum to 1
             weights_array = np.random.dirichlet(np.ones(len(self.feature_names)))
             weights = dict(zip(self.feature_names, weights_array))
 
-            # 计算分数
+            # Score the candidate weights
             scores = self.compute_weighted_score(weights)
             metrics = self.evaluate_weights(scores)
 
@@ -337,7 +337,7 @@ class DreamBMCWeightOptimizer:
             if (i + 1) % 400 == 0:
                 print(f"  Progress: {i + 1}/{n_samples}, Best ROC-AUC: {best_roc:.4f}")
 
-        print(f"\n✅ Grid Search Complete!")
+        print(f"\n[OK] Grid Search Complete!")
         print(f"Best ROC-AUC: {best_roc:.4f}")
         print(f"Best PR-AUC: {best_metrics['pr_auc']:.4f}")
         print(f"Best Score Gap: {best_metrics['score_gap']:.4f}")
@@ -352,29 +352,29 @@ class DreamBMCWeightOptimizer:
         }
 
     # ============================================================
-    # 方法2: 贝叶斯优化
+    # Method 2: Bayesian optimization
     # ============================================================
 
     def bayesian_optimization(self, n_iter: int = 100) -> Dict:
         """
-        贝叶斯优化寻找最优权重
+        Search for the best weights with Bayesian optimization.
 
         Args:
-            n_iter: 优化迭代次数
+            n_iter: Number of optimization iterations
         """
         if not HAS_BAYESOPT:
-            print("❌ Bayesian Optimization not available")
+            print("[ERROR] Bayesian Optimization not available")
             print("   Install with: pip install bayesian-optimization")
             return None
 
         print(f"\n{'=' * 60}")
-        print("🎯 Method 2: Bayesian Optimization")
+        print("Method 2: Bayesian Optimization")
         print(f"{'=' * 60}")
         print(f"Running {n_iter} iterations...")
 
-        # 定义目标函数
+        # Objective function
         def objective(**kwargs):
-            # 归一化权重
+            # Normalize the weights
             total = sum(kwargs.values())
             if total == 0:
                 return 0.0
@@ -383,13 +383,13 @@ class DreamBMCWeightOptimizer:
             scores = self.compute_weighted_score(weights)
             metrics = self.evaluate_weights(scores)
             
-            # 优化 ROC-AUC
+            # Optimize for ROC-AUC
             return metrics['roc_auc']
 
-        # 定义搜索空间
+        # Search space
         pbounds = {feat: (0.0, 1.0) for feat in self.feature_names}
 
-        # 运行优化
+        # Run the optimizer
         optimizer = BayesianOptimization(
             f=objective,
             pbounds=pbounds,
@@ -399,16 +399,16 @@ class DreamBMCWeightOptimizer:
 
         optimizer.maximize(init_points=10, n_iter=n_iter)
 
-        # 获取最佳权重
+        # Retrieve the best weights
         best_params = optimizer.max['params']
         total = sum(best_params.values())
         best_weights = {k: v / total for k, v in best_params.items()}
 
-        # 计算最终指标
+        # Compute the final metrics
         scores = self.compute_weighted_score(best_weights)
         best_metrics = self.evaluate_weights(scores)
 
-        print(f"\n✅ Bayesian Optimization Complete!")
+        print(f"\n[OK] Bayesian Optimization Complete!")
         print(f"Best ROC-AUC: {best_metrics['roc_auc']:.4f}")
         print(f"Best PR-AUC: {best_metrics['pr_auc']:.4f}")
         print(f"Best Score Gap: {best_metrics['score_gap']:.4f}")
@@ -423,27 +423,27 @@ class DreamBMCWeightOptimizer:
         }
 
     # ============================================================
-    # 方法3: Logistic Regression
+    # Method 3: Logistic Regression
     # ============================================================
 
     def logistic_regression(self) -> Dict:
-        """使用逻辑回归学习权重"""
+        """Learn the weights with logistic regression."""
         print(f"\n{'=' * 60}")
-        print("📊 Method 3: Logistic Regression")
+        print("Method 3: Logistic Regression")
         print(f"{'=' * 60}")
 
-        # 标准化特征
+        # Standardize the features
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(self.X)
 
-        # 训练逻辑回归
+        # Fit the logistic regression model
         lr = LogisticRegression(random_state=42, max_iter=1000)
         lr.fit(X_scaled, self.y)
 
-        # 获取系数作为权重
+        # Use the coefficients as weights
         coefficients = lr.coef_[0]
         
-        # 归一化为正权重
+        # Normalize into non-negative weights
         abs_coef = np.abs(coefficients)
         total = np.sum(abs_coef)
         if total > 0:
@@ -453,11 +453,11 @@ class DreamBMCWeightOptimizer:
 
         weights = dict(zip(self.feature_names, weights_array))
 
-        # 计算指标
+        # Compute the metrics
         scores = self.compute_weighted_score(weights)
         metrics = self.evaluate_weights(scores)
 
-        print(f"\n✅ Logistic Regression Complete!")
+        print(f"\n[OK] Logistic Regression Complete!")
         print(f"ROC-AUC: {metrics['roc_auc']:.4f}")
         print(f"PR-AUC: {metrics['pr_auc']:.4f}")
         print(f"Score Gap: {metrics['score_gap']:.4f}")
@@ -472,21 +472,21 @@ class DreamBMCWeightOptimizer:
         }
 
     # ============================================================
-    # 方法4: XGBoost
+    # Method 4: XGBoost
     # ============================================================
 
     def xgboost_optimization(self) -> Dict:
-        """使用 XGBoost 学习特征重要性"""
+        """Derive the weights from XGBoost feature importances."""
         if not HAS_XGBOOST:
-            print("❌ XGBoost not available")
+            print("[ERROR] XGBoost not available")
             print("   Install with: pip install xgboost")
             return None
 
         print(f"\n{'=' * 60}")
-        print("🚀 Method 4: XGBoost Feature Importance")
+        print("Method 4: XGBoost Feature Importance")
         print(f"{'=' * 60}")
 
-        # 训练 XGBoost
+        # Fit the XGBoost model
         model = xgb.XGBClassifier(
             n_estimators=100,
             max_depth=3,
@@ -496,10 +496,10 @@ class DreamBMCWeightOptimizer:
         )
         model.fit(self.X, self.y)
 
-        # 获取特征重要性
+        # Read the feature importances
         importance = model.feature_importances_
         
-        # 归一化
+        # Normalize
         total = np.sum(importance)
         if total > 0:
             weights_array = importance / total
@@ -508,11 +508,11 @@ class DreamBMCWeightOptimizer:
 
         weights = dict(zip(self.feature_names, weights_array))
 
-        # 计算指标
+        # Compute the metrics
         scores = self.compute_weighted_score(weights)
         metrics = self.evaluate_weights(scores)
 
-        print(f"\n✅ XGBoost Complete!")
+        print(f"\n[OK] XGBoost Complete!")
         print(f"ROC-AUC: {metrics['roc_auc']:.4f}")
         print(f"PR-AUC: {metrics['pr_auc']:.4f}")
         print(f"Score Gap: {metrics['score_gap']:.4f}")
@@ -527,11 +527,11 @@ class DreamBMCWeightOptimizer:
         }
 
     # ============================================================
-    # 运行所有方法
+    # Run every method
     # ============================================================
 
     def optimize_all(self, methods: str = "all") -> List[Dict]:
-        """运行所有优化方法"""
+        """Run all requested optimization methods."""
         results = []
 
         if methods == "all" or "grid" in methods:
@@ -557,18 +557,18 @@ class DreamBMCWeightOptimizer:
         return results
 
     # ============================================================
-    # 可视化和保存
+    # Visualization and saving
     # ============================================================
 
     def visualize_results(self, results: List[Dict], output_dir: str):
-        """可视化优化结果"""
+        """Plot the optimization results."""
         if len(results) == 0:
             return
 
-        # 创建输出目录
+        # Create the output directory
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-        # 1. 方法对比图
+        # 1. Method comparison bar charts
         fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
         methods = [r['method'] for r in results]
@@ -595,9 +595,9 @@ class DreamBMCWeightOptimizer:
 
         plt.tight_layout()
         plt.savefig(f"{output_dir}/method_comparison.png", dpi=300, bbox_inches='tight')
-        print(f"\n✓ Saved: {output_dir}/method_comparison.png")
+        print(f"\n[OK] Saved: {output_dir}/method_comparison.png")
 
-        # 2. 权重对比热图
+        # 2. Weight comparison heatmap
         fig, ax = plt.subplots(figsize=(10, 6))
         
         weights_df = pd.DataFrame([r['weights'] for r in results], index=methods)
@@ -606,18 +606,18 @@ class DreamBMCWeightOptimizer:
         
         plt.tight_layout()
         plt.savefig(f"{output_dir}/weights_heatmap.png", dpi=300, bbox_inches='tight')
-        print(f"✓ Saved: {output_dir}/weights_heatmap.png")
+        print(f"[OK] Saved: {output_dir}/weights_heatmap.png")
 
         plt.close('all')
 
     def save_results(self, results: List[Dict], output_dir: str):
-        """保存优化结果"""
+        """Save the optimization results."""
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-        # 找到最佳方法
+        # Pick the best-performing method
         best_result = max(results, key=lambda x: x['metrics']['roc_auc'])
 
-        # 🔧 修复：转换所有数据为原生 Python 类型
+        # Convert everything to native Python types so json.dump succeeds
         output_data = {
             'task': self.task_name,
             'timestamp': datetime.now().isoformat(),
@@ -629,9 +629,9 @@ class DreamBMCWeightOptimizer:
 
         with open(f"{output_dir}/optimization_results.json", 'w') as f:
             json.dump(output_data, f, indent=2)
-        print(f"✓ Saved: {output_dir}/optimization_results.json")
+        print(f"[OK] Saved: {output_dir}/optimization_results.json")
 
-        # 保存对比表格
+        # Save the comparison table
         comparison_df = pd.DataFrame([
             {
                 'Method': r['method'],
@@ -643,15 +643,15 @@ class DreamBMCWeightOptimizer:
             for r in results
         ])
         comparison_df.to_csv(f"{output_dir}/method_comparison.csv", index=False)
-        print(f"✓ Saved: {output_dir}/method_comparison.csv")
+        print(f"[OK] Saved: {output_dir}/method_comparison.csv")
 
-        # 生成最优权重代码
-        code = f"""# Dream BMC 最优权重配置
-# 任务: {self.task_name}
-# 方法: {best_result['method']}
+        # Emit a Python snippet with the best weights
+        code = f"""# Dream BMC optimal weight configuration
+# Task: {self.task_name}
+# Method: {best_result['method']}
 # ROC-AUC: {float(best_result['metrics']['roc_auc']):.4f}
 # Score Gap: {float(best_result['metrics']['score_gap']):.4f}
-# 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+# Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 optimized_weights = {{
 """
@@ -659,16 +659,16 @@ optimized_weights = {{
             code += f"    '{feat}': {float(weight):.6f},\n"
         code += "}\n\n"
         
-        code += """# 使用示例
+        code += """# Usage example
 def compute_consistency_score(bmc_scores):
     \"\"\"
-    使用优化后的权重计算一致性分数
-    
+    Compute the consistency score using the optimized weights
+
     Args:
-        bmc_scores: dict, 包含各项 BMC 指标
-    
+        bmc_scores: dict containing the individual BMC metrics
+
     Returns:
-        float, 一致性分数 (0-1)
+        float, the consistency score in [0, 1]
     \"\"\"
     score = 0.0
     for metric, weight in optimized_weights.items():
@@ -678,7 +678,7 @@ def compute_consistency_score(bmc_scores):
 
         with open(f"{output_dir}/optimized_weights.py", 'w') as f:
             f.write(code)
-        print(f"✓ Saved: {output_dir}/optimized_weights.py")
+        print(f"[OK] Saved: {output_dir}/optimized_weights.py")
 
 
 def main():
@@ -694,32 +694,32 @@ def main():
                         help="Optimization methods: all, grid, bayes, logistic, xgboost")
     args = parser.parse_args()
 
-    # 设置输出目录
+    # Set the output directory
     if args.output_dir is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         args.output_dir = f"bmc_optimization_{args.dataset}_{timestamp}"
 
-    # 构建文件匹配模式
+    # Build the file match pattern
     pattern = f"{args.result_dir}/{args.dataset}_*_merged.json"
     
-    # 如果没有 merged 文件，尝试原始文件
+    # Fall back to the raw generation files when no merged files exist
     if len(glob.glob(pattern)) == 0:
         pattern = f"{args.result_dir}/{args.dataset}_*_generations.json"
-        print(f"⚠️  No merged files found, trying original generation files...")
+        print(f"[WARN] No merged files found, trying original generation files...")
 
     print("\n" + "=" * 80)
-    print("🔬 Dream BMC Weight Optimization Tool (Fixed Version)")
+    print("Dream BMC Weight Optimization Tool")
     print("=" * 80)
     print(f"\nDataset: {args.dataset}")
     print(f"Result directory: {args.result_dir}")
     print(f"Output directory: {args.output_dir}")
     print(f"Methods: {args.methods}")
 
-    # 初始化优化器
+    # Initialize the optimizer
     try:
         optimizer = DreamBMCWeightOptimizer(pattern, args.dataset)
     except Exception as e:
-        print(f"\n❌ Error initializing optimizer: {e}")
+        print(f"\n[ERROR] Error initializing optimizer: {e}")
         print("\nPlease check:")
         print(f"  1. Result files exist: {pattern}")
         print(f"  2. Files contain valid BMC scores")
@@ -729,41 +729,41 @@ def main():
         print(f"  - Make sure you've run BMC evaluation first")
         return
 
-    # 运行优化
+    # Run the optimization
     results = optimizer.optimize_all(args.methods)
 
     if len(results) == 0:
-        print("\n❌ No optimization results generated")
+        print("\n[ERROR] No optimization results generated")
         print("Check if the required libraries are installed:")
         print("  - For Bayesian Optimization: pip install bayesian-optimization")
         print("  - For XGBoost: pip install xgboost")
         return
 
-    # 可视化和保存
+    # Plot and save
     optimizer.visualize_results(results, args.output_dir)
     optimizer.save_results(results, args.output_dir)
 
-    # 打印总结
+    # Print the summary
     print(f"\n{'=' * 80}")
-    print("✅ Optimization Complete!")
+    print("[OK] Optimization Complete!")
     print(f"{'=' * 80}")
     print(f"\nResults saved to: {args.output_dir}")
     print("\nGenerated files:")
-    print(f"  📊 method_comparison.png       - Visual comparison")
-    print(f"  📊 weights_heatmap.png         - Weight heatmap")
-    print(f"  📋 method_comparison.csv       - Comparison table")
-    print(f"  💾 optimization_results.json   - Full results")
-    print(f"  🔧 optimized_weights.py        - Best weights code")
+    print(f"  method_comparison.png       - Visual comparison")
+    print(f"  weights_heatmap.png         - Weight heatmap")
+    print(f"  method_comparison.csv       - Comparison table")
+    print(f"  optimization_results.json   - Full results")
+    print(f"  optimized_weights.py        - Best weights code")
     
-    # 显示最佳结果
+    # Show the best result
     best_result = max(results, key=lambda x: x['metrics']['roc_auc'])
-    print(f"\n🏆 Best Method: {best_result['method']}")
+    print(f"\nBest Method: {best_result['method']}")
     print(f"   ROC-AUC: {best_result['metrics']['roc_auc']:.4f}")
     print(f"   PR-AUC: {best_result['metrics']['pr_auc']:.4f}")
     print(f"   Score Gap: {best_result['metrics']['score_gap']:.4f}")
     print(f"   Best Accuracy: {best_result['metrics']['best_accuracy']:.4f}")
     
-    print(f"\n💡 Recommended Weights:")
+    print(f"\nRecommended Weights:")
     for feat, weight in sorted(best_result['weights'].items(), key=lambda x: -x[1]):
         print(f"   {feat:25s}: {float(weight):.4f}")
     

@@ -660,7 +660,7 @@ if __name__ == "__main__":
 
     if args.skip_existing and os.path.exists(filename) and os.path.getsize(filename) > 100:
         if dist.get_rank() == 0:
-            print(f"\n⏭️  SKIPPING (results exist): {filename}")
+            print(f"\n[INFO] SKIPPING (results exist): {filename}")
         cleanup_ddp()
         exit(0)
 
@@ -709,6 +709,6 @@ if __name__ == "__main__":
         dist.barrier()
 
     if dist.get_rank() == 0:
-        print(f"\n✅ Complete! Results in: {args.output_dir}")
+        print(f"\n[OK] Complete! Results in: {args.output_dir}")
 
     cleanup_ddp()

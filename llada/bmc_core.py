@@ -1,17 +1,17 @@
 """
-BMC核心模块：V3最终版 - 完整优化 + Chat Template支持
-主要改进：
-1. 🔥 支持加载和使用优化权重
-2. 🔥 通用答案提取器（支持选择题、数学题、代码题）
-3. 🔥 提取置信度评估和加权
-4. 🔥 任务特定的答案比对逻辑
-5. 🔥 NEW: 支持完整的Chat Template，保持与初次生成格式一致
-6. 激进的评分公式（作为备选）
-7. 自适应t_probe
-8. 多次采样支持
-9. 置信度跟踪
-10. <answer>标签内容始终mask，<reasoning>按t比例mask
-11. 🔥 诊断功能（分析提取质量）
+BMC core module (V3): full optimization plus chat-template support.
+Main features:
+1. Loading and applying optimized scoring weights
+2. Universal answer extractor (multiple choice, math, code)
+3. Extraction-confidence estimation and weighting
+4. Task-specific answer comparison logic
+5. Full chat-template support so the probe input matches the format used at generation time
+6. Aggressive scoring formula (as an alternative)
+7. Adaptive t_probe
+8. Multi-sample probing
+9. Confidence tracking
+10. <answer> content is always masked, while <reasoning> is masked at ratio t
+11. Diagnostics for extraction quality
 """
 import torch
 import torch.nn.functional as F
@@ -22,11 +22,11 @@ from difflib import SequenceMatcher
 import sys
 import os
 
-# 添加父目录到路径以导入task_utils
+# Add the parent directory to sys.path so that task_utils can be imported
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 class BMCEstimator:
-    """BMC 估计器 - V3最终版（支持Chat Template）"""
+    """BMC estimator (V3) with chat-template support."""
 
     def __init__(
         self,
@@ -40,23 +40,23 @@ class BMCEstimator:
         optimized_weights: Optional[Dict[str, float]] = None,
         task_name: Optional[str] = None,
         task_config: Optional[Dict] = None,
-        system_prompt: Optional[str] = None,  # 🔥 NEW
-        use_chat_template: bool = True,  # 🔥 NEW
+        system_prompt: Optional[str] = None,
+        use_chat_template: bool = True,
     ):
         """
         Args:
             model: LLaDA AutoModel
             tokenizer: Tokenizer
-            device: 运行设备
-            semantic_model_path: 本地语义编码器路径
-            adaptive_t: 是否使用自适应t_probe
-            num_samples: 重复采样次数（>=1）
-            aggressive_scoring: 使用更激进的评分策略（如果没有优化权重）
-            optimized_weights: 优化后的权重字典（优先级最高）
-            task_name: 任务名称（如 'gsm8k', 'gpqa', 'humaneval' 等）
-            task_config: 任务配置字典，包含 'extractor' 和 'validator'
-            system_prompt: 🔥 NEW - System prompt文本（用于chat template）
-            use_chat_template: 🔥 NEW - 是否使用chat template（默认True）
+            device: device to run on
+            semantic_model_path: local path to the semantic encoder
+            adaptive_t: whether to use an adaptive t_probe
+            num_samples: number of repeated probe samples (>= 1)
+            aggressive_scoring: use the more aggressive scoring strategy when no optimized weights are given
+            optimized_weights: dict of optimized weights (takes precedence over everything else)
+            task_name: task name (e.g. 'gsm8k', 'gpqa', 'humaneval')
+            task_config: task configuration dict containing 'extractor' and 'validator'
+            system_prompt: system prompt text (used by the chat template)
+            use_chat_template: whether to use the chat template (default True)
         """
         self.model = model
         self.tokenizer = tokenizer
@@ -65,25 +65,25 @@ class BMCEstimator:
         self.num_samples = max(1, num_samples)
         self.aggressive_scoring = aggressive_scoring
 
-        # 🔥 优化权重支持
+        # Optimized weights
         self.optimized_weights = optimized_weights
         self.use_optimized_weights = optimized_weights is not None
         
-        # 🔥 任务特定配置
+        # Task-specific configuration
         self.task_name = task_name.lower() if task_name else None
         self.task_config = task_config
         
-        # 🔥 NEW: Chat Template支持
+        # Chat-template configuration
         self.system_prompt = system_prompt
         self.use_chat_template = use_chat_template
         
-        # 判断任务类型
+        # Determine the task family
         self.is_choice_task = self.task_name in ['gpqa', 'mmlu', 'arc', 'hellaswag']
         self.is_math_task = self.task_name in ['gsm8k', 'math', 'aime', 'olympiad']
         self.is_code_task = self.task_name in ['humaneval', 'mbpp']
         self.needs_postprocessing = self.task_name in ['countdown', 'humaneval', 'mbpp', 'sudoku']
 
-        # 动态获取 mask_token_id（支持 LLaDA-8B: 126336 和 LLaDA-MoE: 156895）
+        # Resolve mask_token_id dynamically (LLaDA-8B: 126336, LLaDA-MoE: 156895)
         self.mask_token_id = getattr(tokenizer, 'mask_token_id', None)
         if self.mask_token_id is None:
             self.mask_token_id = 126336  # LLaDA-8B fallback
@@ -92,68 +92,68 @@ class BMCEstimator:
             print(f"[BMC] Using mask_token_id from tokenizer: {self.mask_token_id}")
         self.model.eval()
 
-        # 加载语义编码器
+        # Load the semantic encoder
         try:
             from sentence_transformers import SentenceTransformer
             if semantic_model_path:
                 self.semantic_encoder = SentenceTransformer(semantic_model_path)
-                print(f"✓ 语义编码器加载成功 (本地路径)")
+                print(f"[OK] Semantic encoder loaded (local path)")
             else:
                 self.semantic_encoder = SentenceTransformer('all-MiniLM-L6-v2')
-                print("✓ 语义编码器加载成功")
+                print("[OK] Semantic encoder loaded")
         except Exception as e:
-            print(f"⚠ 语义编码器加载失败: {e}")
+            print(f"[WARN] Failed to load the semantic encoder: {e}")
             self.semantic_encoder = None
 
-        # 打印配置
+        # Print the configuration
         self._print_config()
 
     def _print_config(self):
-        """打印配置信息"""
+        """Print the current configuration."""
         print("\n" + "="*60)
-        print("BMC V3 配置")
+        print("BMC V3 configuration")
         print("="*60)
         
-        # 🔥 格式配置
-        print(f"✅ Chat Template: {'启用' if self.use_chat_template else '禁用'}")
+        # Input format
+        print(f"[OK] Chat template: {'enabled' if self.use_chat_template else 'disabled'}")
         if self.use_chat_template and self.system_prompt:
-            print(f"   System Prompt (前50字): {self.system_prompt[:50]}...")
+            print(f"   System prompt (first 50 chars): {self.system_prompt[:50]}...")
         elif self.use_chat_template and not self.system_prompt:
-            print(f"   ⚠️  Chat Template启用但未提供System Prompt")
+            print(f"   [WARN] Chat template is enabled but no system prompt was provided")
         
-        # 评分策略
+        # Scoring strategy
         if self.use_optimized_weights:
-            print("\n✅ 评分策略: 优化权重")
-            print("权重配置:")
+            print("\n[OK] Scoring strategy: optimized weights")
+            print("Weights:")
             for feat, weight in sorted(self.optimized_weights.items(), key=lambda x: -x[1]):
                 print(f"  {feat:25s}: {weight:.4f}")
         elif self.aggressive_scoring:
-            print("\n✅ 评分策略: 激进评分")
+            print("\n[OK] Scoring strategy: aggressive")
         else:
-            print("\n✅ 评分策略: 默认评分")
+            print("\n[OK] Scoring strategy: default")
         
-        # 任务配置
+        # Task configuration
         if self.task_name:
-            print(f"\n✅ 任务类型: {self.task_name}")
+            print(f"\n[OK] Task type: {self.task_name}")
             if self.is_choice_task:
-                print("   → 选择题任务（使用宽松答案提取）")
+                print("   -> Multiple-choice task (lenient answer extraction)")
             elif self.is_math_task:
-                print("   → 数学任务（使用数值答案提取）")
+                print("   -> Math task (numeric answer extraction)")
             elif self.is_code_task:
-                print("   → 代码任务（使用代码提取）")
+                print("   -> Code task (code extraction)")
             
             if self.task_config:
-                print("   → 使用任务特定的提取器和验证器")
+                print("   -> Using the task-specific extractor and validator")
         
         print("="*60 + "\n")
 
     def compute_adaptive_t(self, question: str, base_t: float = 0.9) -> float:
         """
-        🔥 根据问题复杂度自适应调整t_probe
+        Adapt t_probe to the complexity of the question.
 
-        策略：
-        - 短问题/简单问题 → 更高的t（更难重构）
-        - 长问题/复杂问题 → 稍低的t（避免过度破坏）
+        Strategy:
+        - short / simple questions -> higher t (harder to reconstruct)
+        - long / complex questions -> slightly lower t (avoid destroying too much context)
         """
         if not self.adaptive_t:
             return base_t
@@ -161,20 +161,20 @@ class BMCEstimator:
         q_len = len(question)
         word_count = len(question.split())
 
-        # 复杂度指标
+        # Complexity indicators
         has_multiple_steps = any(kw in question.lower() for kw in
                                 ['first', 'then', 'after', 'finally', 'step'])
         has_numbers = bool(re.findall(r'\d+', question))
 
-        # 基础调整
-        if q_len < 100:  # 短问题
+        # Length-based adjustment
+        if q_len < 100:  # short question
             t_adjust = 0.05
-        elif q_len > 300:  # 长问题
+        elif q_len > 300:  # long question
             t_adjust = -0.05
         else:
             t_adjust = 0.0
 
-        # 复杂度调整
+        # Complexity-based adjustment
         if has_multiple_steps:
             t_adjust -= 0.03
         if word_count > 50:
@@ -190,12 +190,12 @@ class BMCEstimator:
         answer_start_idx: int
     ) -> torch.Tensor:
         """
-        🔥 改进的前向加噪：
-        1. <answer>标签内容始终完全mask（核心测试目标）
-        2. <reasoning>部分按t比例mask（提供推理上下文）
+        Forward noising:
+        1. The <answer> content is always fully masked (this is what we probe).
+        2. The <reasoning> part is masked at ratio t (it supplies reasoning context).
 
         Args:
-            t: mask比例，仅应用于<reasoning>部分
+            t: mask ratio, applied only to the <reasoning> part
         """
         masked_ids = input_ids.clone()
         batch_size, seq_len = input_ids.shape
@@ -207,22 +207,22 @@ class BMCEstimator:
         if generated_len <= 0:
             return masked_ids
 
-        # 逐样本处理（因为需要文本解析）
+        # Process one sample at a time, since this requires decoding the text
         for b in range(batch_size):
             generated_ids = input_ids[b, answer_start_idx:]
             generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=False)
 
-            # 查找 <answer> 标签的起始位置
+            # Locate the start of the <answer> tag
             answer_tag_start = generated_text.find('<answer>')
 
             if answer_tag_start == -1:
-                # 如果没有找到<answer>标签，按原逻辑处理整个生成部分
+                # No <answer> tag: fall back to masking the whole generated span
                 mask_probs = torch.rand(generated_len, device=self.device)
                 mask = mask_probs < t
                 masked_ids[b, answer_start_idx:][mask] = self.mask_token_id
                 continue
 
-            # 🔍 找到<answer>标签在token序列中的位置
+            # Map the character offset of <answer> to a token index
             cumulative_text = ""
             answer_token_start_idx = -1
 
@@ -236,21 +236,21 @@ class BMCEstimator:
                     break
 
             if answer_token_start_idx == -1:
-                # 定位失败，使用原逻辑
+                # Token lookup failed: fall back to masking the whole generated span
                 mask_probs = torch.rand(generated_len, device=self.device)
                 mask = mask_probs < t
                 masked_ids[b, answer_start_idx:][mask] = self.mask_token_id
                 continue
 
-            # 🔥 分段处理：
-            # 1. <reasoning> 部分（0 到 answer_token_start_idx）：按 t 比例 mask
+            # Mask the two segments separately:
+            # 1. <reasoning> part (0 .. answer_token_start_idx): mask at ratio t
             reasoning_len = answer_token_start_idx
             if reasoning_len > 0:
                 mask_probs = torch.rand(reasoning_len, device=self.device)
                 mask = mask_probs < t
                 masked_ids[b, answer_start_idx:answer_start_idx + reasoning_len][mask] = self.mask_token_id
 
-            # 2. <answer> 部分（answer_token_start_idx 到结尾）：完全 mask
+            # 2. <answer> part (answer_token_start_idx .. end): mask completely
             answer_len = generated_len - answer_token_start_idx
             if answer_len > 0:
                 masked_ids[b, answer_start_idx + answer_token_start_idx:] = self.mask_token_id
@@ -266,11 +266,11 @@ class BMCEstimator:
         track_confidence: bool = True
     ) -> Tuple[torch.Tensor, float]:
         """
-        反向去噪：使用LLaDA原生的iterative denoising
+        Reverse denoising using LLaDA's native iterative denoising.
 
         Returns:
-            reconstructed_ids: 重构的token序列
-            avg_confidence: 平均预测置信度
+            reconstructed_ids: the reconstructed token sequence
+            avg_confidence: mean prediction confidence
         """
         current_ids = masked_ids.clone()
         q_len = question_ids.size(1)
@@ -278,19 +278,19 @@ class BMCEstimator:
 
         with torch.no_grad():
             for step in range(num_steps):
-                # 获取logits
+                # Get logits
                 logits = self.model(current_ids).logits
 
-                # 找到masked位置
+                # Find the masked positions
                 mask_positions = (current_ids == self.mask_token_id)
 
                 if not mask_positions.any():
                     break
 
-                # 计算概率
+                # Convert to probabilities
                 probs = F.softmax(logits, dim=-1)
 
-                # 预测tokens
+                # Predict tokens
                 if temperature == 0.0:
                     predicted_tokens = logits.argmax(dim=-1)
                 else:
@@ -299,16 +299,16 @@ class BMCEstimator:
                         num_samples=1
                     ).view(logits.shape[:-1])
 
-                # 获取置信度
+                # Per-token confidence
                 confidence = probs.max(dim=-1).values
 
-                # 记录答案部分的平均置信度
+                # Track the mean confidence over the answer span
                 if track_confidence:
                     answer_conf = confidence[:, q_len:][mask_positions[:, q_len:]]
                     if len(answer_conf) > 0:
                         confidences.append(answer_conf.mean().item())
 
-                # 渐进式unmask
+                # Progressive unmasking
                 unmask_ratio = (step + 1) / num_steps
 
                 for b in range(current_ids.size(0)):
@@ -316,7 +316,7 @@ class BMCEstimator:
                     if len(masked_indices) == 0:
                         continue
 
-                    # 只处理答案部分
+                    # Only operate on the answer span
                     answer_masked = masked_indices[masked_indices >= q_len]
                     if len(answer_masked) == 0:
                         continue
@@ -324,7 +324,7 @@ class BMCEstimator:
                     confidences_b = confidence[b, answer_masked]
                     num_to_unmask = max(1, int(len(answer_masked) * unmask_ratio))
 
-                    # 选择最高置信度unmask
+                    # Unmask the highest-confidence positions first
                     k = min(num_to_unmask, len(confidences_b))
                     if k > 0:
                         top_k = torch.topk(confidences_b, k)
@@ -343,12 +343,12 @@ class BMCEstimator:
         return_details: bool = False
     ) -> Dict[str, float]:
         """
-        完整的BMC探测流程
+        Full BMC probing pipeline.
 
-        如果num_samples > 1，会进行多次采样并取平均
+        When num_samples > 1, the probe is repeated and the scores are averaged.
         """
 
-        # 多次采样
+        # Repeated sampling
         if self.num_samples > 1:
             all_scores = []
             for i in range(self.num_samples):
@@ -357,13 +357,13 @@ class BMCEstimator:
                 )
                 all_scores.append(scores)
 
-            # 平均所有分数
+            # Average all scores
             avg_scores = {}
             for key in all_scores[0].keys():
                 if isinstance(all_scores[0][key], (int, float)):
                     avg_scores[key] = np.mean([s[key] for s in all_scores])
                 else:
-                    avg_scores[key] = all_scores[0][key]  # 非数值字段取第一个
+                    avg_scores[key] = all_scores[0][key]  # keep the first value for non-numeric fields
 
             avg_scores['sample_std'] = np.std([s['consistency_score'] for s in all_scores])
             return avg_scores
@@ -378,13 +378,13 @@ class BMCEstimator:
         num_reverse_steps: int,
         return_details: bool
     ) -> Dict[str, float]:
-        """单次探测"""
+        """Run a single probe."""
         try:
-            # 自适应t_probe
+            # Adaptive t_probe
             if self.adaptive_t:
                 t_probe = self.compute_adaptive_t(question, t_probe)
 
-            # 🔥 根据任务类型动态调整max_length
+            # Pick max_length according to the task type
             if self.task_name == 'gpqa':
                 question_max_length = 384
                 full_text_max_length = 768
@@ -395,11 +395,11 @@ class BMCEstimator:
                 question_max_length = 256
                 full_text_max_length = 512
 
-            # 🔥 NEW: 使用chat template构建输入
+            # Build the input with the chat template
             if self.use_chat_template and self.system_prompt:
-                # ===== 方法1：完整chat template =====
+                # ===== Option 1: full chat template =====
                 
-                # 构建完整对话（包含生成的答案）
+                # Build the full conversation, including the generated answer
                 messages_full = [
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": question},
@@ -409,10 +409,10 @@ class BMCEstimator:
                 full_text = self.tokenizer.apply_chat_template(
                     messages_full,
                     tokenize=False,
-                    add_generation_prompt=False  # 已经有assistant内容
+                    add_generation_prompt=False  # the assistant turn is already present
                 )
                 
-                # 编码完整文本
+                # Encode the full text
                 input_ids = self.tokenizer.encode(
                     full_text,
                     return_tensors='pt',
@@ -420,7 +420,7 @@ class BMCEstimator:
                     truncation=True
                 ).to(self.device)
                 
-                # 构建question部分（用于定位answer起始位置）
+                # Build the question-only prefix, used to locate where the answer starts
                 messages_question = [
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": question}
@@ -429,7 +429,7 @@ class BMCEstimator:
                 question_with_template = self.tokenizer.apply_chat_template(
                     messages_question,
                     tokenize=False,
-                    add_generation_prompt=True  # 添加<|assistant|>标记
+                    add_generation_prompt=True  # append the <|assistant|> marker
                 )
                 
                 question_ids = self.tokenizer.encode(
@@ -442,7 +442,7 @@ class BMCEstimator:
                 answer_start_idx = question_ids.size(1)
                 
             else:
-                # ===== 方法2：简单拼接（向后兼容）=====
+                # ===== Option 2: plain concatenation (backward compatible) =====
                 full_text = question + answer
                 input_ids = self.tokenizer.encode(
                     full_text,
@@ -460,14 +460,14 @@ class BMCEstimator:
 
                 answer_start_idx = question_ids.size(1)
 
-            # 检查有效性
+            # Sanity check
             if answer_start_idx >= input_ids.size(1):
                 return self._default_scores("", t_probe)
 
-            # 2. 前向扩散（改进版：<answer>标签始终mask）
+            # 2. Forward diffusion (the <answer> span is always masked)
             masked_ids = self.forward_diffusion(input_ids, t_probe, answer_start_idx)
 
-            # 3. 反向扩散（带置信度跟踪）
+            # 3. Reverse diffusion (with confidence tracking)
             reconstructed_ids, avg_confidence = self.reverse_diffusion(
                 masked_ids,
                 question_ids,
@@ -475,7 +475,7 @@ class BMCEstimator:
                 track_confidence=True
             )
 
-            # 4. 计算一致性
+            # 4. Compute consistency
             scores = self.compute_consistency_score(
                 input_ids,
                 reconstructed_ids,
@@ -484,7 +484,7 @@ class BMCEstimator:
                 avg_confidence
             )
 
-            # 5. 重构文本
+            # 5. Decode the reconstructed text
             scores['reconstructed_text'] = self.tokenizer.decode(
                 reconstructed_ids[0, answer_start_idx:],
                 skip_special_tokens=True
@@ -496,13 +496,13 @@ class BMCEstimator:
             return scores
 
         except Exception as e:
-            print(f"探测过程出错: {e}")
+            print(f"[ERROR] Probing failed: {e}")
             import traceback
             traceback.print_exc()
             return self._default_scores("", t_probe)
 
     def _default_scores(self, recon_text: str, t_probe: float = 0.0) -> Dict:
-        """返回默认分数"""
+        """Return the default (zero) score dict."""
         return {
             'token_accuracy': 0.0,
             'sequence_accuracy': 0.0,
@@ -518,44 +518,44 @@ class BMCEstimator:
             'extraction_confidence_recon': 0.0,
         }
 
-    # ==================== 🔥 通用答案提取器 ====================
+    # ==================== Universal answer extraction ====================
     
     def extract_final_answer_universal(self, text: str) -> Tuple[str, float]:
         """
-        通用答案提取器 - 根据任务类型自动选择
+        Universal answer extractor; dispatches on the task type.
         
         Returns:
-            (答案, 提取置信度)
+            (answer, extraction confidence)
         """
         if not text:
             return "", 0.0
         
-        # 🔥 选择题任务
+        # Multiple-choice tasks
         if self.is_choice_task:
             return self._extract_choice_answer(text)
         
-        # 🔥 数学任务（数值答案）
+        # Math tasks (numeric answers)
         elif self.is_math_task:
             return self._extract_numeric_answer(text)
         
-        # 🔥 代码任务（通常依赖task_config）
+        # Code tasks (normally handled through task_config)
         elif self.is_code_task:
-            # 代码任务通常不需要简单提取，返回全文
+            # Code tasks cannot be reduced to a short answer, so return the full text
             return text, 0.5
         
-        # 默认：尝试数值提取
+        # Default: try numeric extraction
         else:
             return self._extract_numeric_answer(text)
 
     def _extract_choice_answer(self, text: str) -> Tuple[str, float]:
-        """提取选择题答案（A/B/C/D/E等）"""
+        """Extract a multiple-choice answer (A/B/C/D/E ...)."""
         
-        # 优先级1: \\boxed{X} 格式（最可靠）
+        # Priority 1: \\boxed{X} format (most reliable)
         match = re.search(r'\\boxed\{([A-E])\}', text, re.IGNORECASE)
         if match:
             return match.group(1).upper(), 1.0
         
-        # 优先级2: <answer>标签内
+        # Priority 2: inside the <answer> tag
         answer_section = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
         if answer_section:
             match = re.search(r'\b([A-E])\b', answer_section.group(1), re.IGNORECASE)
@@ -565,7 +565,7 @@ class BMCEstimator:
             if match:
                 return match.group(1).upper(), 0.95
         
-        # 优先级3: 显式答案声明
+        # Priority 3: explicit answer statements
         patterns = [
             (r'The correct answer is[:\s]*([A-E])\b', 0.90),
             (r'The answer is[:\s]*([A-E])\b', 0.85),
@@ -579,7 +579,7 @@ class BMCEstimator:
             if match:
                 return match.group(1).upper(), conf
         
-        # 优先级4: 独立的选项字母（低置信度）
+        # Priority 4: a bare option letter (low confidence)
         matches = re.findall(r'\b([A-E])\b', text, re.IGNORECASE)
         if matches:
             unique_choices = set(m.upper() for m in matches)
@@ -593,9 +593,9 @@ class BMCEstimator:
         return "", 0.0
 
     def _extract_numeric_answer(self, text: str) -> Tuple[str, float]:
-        """提取数值答案"""
+        """Extract a numeric answer."""
         
-        # 🔥 优先级1: <answer>标签内
+        # Priority 1: inside the <answer> tag
         answer_section = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
         if answer_section:
             answer_text = answer_section.group(1)
@@ -606,7 +606,7 @@ class BMCEstimator:
                 except:
                     pass
         
-        # 🔥 优先级2: #### 标记（GSM8K标准）
+        # Priority 2: the #### marker (GSM8K convention)
         match = re.search(r'####\s*(-?\d+\.?\d*)', text)
         if match:
             try:
@@ -614,7 +614,7 @@ class BMCEstimator:
             except:
                 pass
         
-        # 🔥 优先级3: 显式答案句式
+        # Priority 3: explicit answer statements
         patterns = [
             (r'The final answer is[:\s]+(-?\d+\.?\d*)', 0.90),
             (r'The answer is[:\s]+(-?\d+\.?\d*)', 0.85),
@@ -633,7 +633,7 @@ class BMCEstimator:
                 except:
                     continue
         
-        # 🔥 优先级4: 兜底 - 最后的数字（低置信度）
+        # Priority 4: fallback to the last number in the text (low confidence)
         numbers = re.findall(r'-?\d+\.?\d*', text)
         if numbers:
             try:
@@ -649,7 +649,7 @@ class BMCEstimator:
         
         return "", 0.0
 
-    # ==================== 🔥 改进的答案匹配 ====================
+    # ==================== Answer matching ====================
 
     def _compute_final_answer_match(
         self, 
@@ -658,13 +658,13 @@ class BMCEstimator:
         original_answer: str
     ) -> Tuple[float, float, float]:
         """
-        🔥 修复版：评分用二值化，诊断保留置信度
+        Binarize the match for scoring, but keep the extraction confidences for diagnostics.
         
         Returns:
             (match_score, orig_conf, recon_conf)
         """
         
-        # 优先使用task_config
+        # Prefer the task-specific extractor/validator when available
         if self.task_config:
             try:
                 extractor = self.task_config.get('extractor')
@@ -686,7 +686,7 @@ class BMCEstimator:
             except Exception as e:
                 pass
         
-        # 通用提取器
+        # Universal extractor
         orig_ans, orig_conf = self.extract_final_answer_universal(orig_text)
         recon_ans, recon_conf = self.extract_final_answer_universal(recon_text)
         
@@ -707,10 +707,10 @@ class BMCEstimator:
         avg_confidence: float = 0.0
     ) -> Dict[str, float]:
         """
-        🔥 V3改进版评分 - 支持优化权重和置信度加权
+        V3 scoring: supports optimized weights and confidence weighting.
         """
 
-        # 解码文本
+        # Decode both texts
         orig_text = self.tokenizer.decode(
             original_ids[0, answer_start_idx:],
             skip_special_tokens=True
@@ -737,7 +737,7 @@ class BMCEstimator:
             token_acc = 0.0
             seq_acc = 0.0
 
-        # 2. 语义相似度
+        # 2. Semantic similarity
         semantic_sim = 0.0
         if self.semantic_encoder is not None:
             try:
@@ -748,7 +748,7 @@ class BMCEstimator:
             except:
                 semantic_sim = 0.0
 
-        # 3. 数字保留率
+        # 3. Number retention rate
         orig_numbers = re.findall(r'\d+', orig_text)
         recon_numbers = re.findall(r'\d+', recon_text)
 
@@ -762,19 +762,19 @@ class BMCEstimator:
         else:
             number_retention = 1.0 if len(recon_numbers) == 0 else 0.5
 
-        # 4. 字符级相似度
+        # 4. Character-level similarity
         char_sim = SequenceMatcher(None, orig_text, recon_text).ratio()
 
-        # 5. 🔥 最终答案匹配
+        # 5. Final-answer match
         final_answer_match, orig_extr_conf, recon_extr_conf = self._compute_final_answer_match(
             orig_text, recon_text, original_answer
         )
 
-        # 🔥 提取最终答案用于后续判断
+        # Extract the final answers again for the penalty checks below
         orig_final, _ = self.extract_final_answer_universal(orig_text)
         recon_final, _ = self.extract_final_answer_universal(recon_text)
 
-        # 🔥 6. 计算最终一致性分数
+        # 6. Combine everything into the consistency score
         if self.use_optimized_weights:
             consistency_score = (
                 self.optimized_weights.get('token_accuracy', 0) * token_acc +
@@ -843,9 +843,8 @@ class BMCEstimator:
         }
 
 
-# 其余BMCEvaluator类代码保持不变...
 class BMCEvaluator:
-    """BMC评估器 - 增强版"""
+    """BMC evaluator."""
 
     def __init__(self, probe):
         self.probe = probe
@@ -858,7 +857,7 @@ class BMCEvaluator:
         label: int,
         **probe_kwargs
     ) -> Dict:
-        """评估单个样本"""
+        """Evaluate a single sample."""
         scores = self.probe.probe(question, answer, **probe_kwargs)
         result = {
             'question': question,
@@ -870,7 +869,7 @@ class BMCEvaluator:
         return result
 
     def compute_metrics(self) -> Dict:
-        """计算整体评估指标"""
+        """Compute the aggregate evaluation metrics."""
         if len(self.results) == 0:
             return {}
 
@@ -881,7 +880,7 @@ class BMCEvaluator:
             scores = [r['consistency_score'] for r in self.results]
 
             if len(set(labels)) < 2:
-                print("警告: 只有一个类别，无法计算AUC")
+                print("[WARN] Only one class present, cannot compute AUC")
                 return {
                     'num_samples': len(labels),
                     'num_correct': sum(labels),
@@ -931,7 +930,7 @@ class BMCEvaluator:
             return metrics
             
         except Exception as e:
-            print(f"计算指标时出错: {e}")
+            print(f"[ERROR] Failed to compute metrics: {e}")
             import traceback
             traceback.print_exc()
             return {}

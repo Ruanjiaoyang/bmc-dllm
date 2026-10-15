@@ -30,7 +30,7 @@ def merge_results(results_dir):
                 method_parts = parts[:i]
                 break
         if rank is None:
-            print(f"  ⚠️  Could not parse rank from: {fname}")
+            print(f"  [WARN] Could not parse rank from: {fname}")
             continue
         method_name = "_".join(method_parts)
         files_by_method[method_name].append((rank, fpath))
@@ -55,7 +55,7 @@ def merge_results(results_dir):
         merged_path = os.path.join(results_dir, f"{method_name}_merged.json")
         with open(merged_path, "w") as f:
             json.dump(merged_obj, f, indent=2)
-        print(f"  ✅ Merged {method_name}: {len(file_list)} ranks, {len(all_results)} total results")
+        print(f"  [OK] Merged {method_name}: {len(file_list)} ranks, {len(all_results)} total results")
         print(f"     → {merged_path}")
 
     # Also create a single "merged.json" for backward compat
@@ -67,7 +67,7 @@ def merge_results(results_dir):
         if os.path.exists(src) and not os.path.exists(dst):
             import shutil
             shutil.copy(src, dst)
-            print(f"  📋 Copied to: {dst}")
+            print(f"  Copied to: {dst}")
 
 
 def main():
@@ -77,14 +77,14 @@ def main():
     args = parser.parse_args()
 
     if not os.path.isdir(args.dir):
-        print(f"❌ Directory not found: {args.dir}")
+        print(f"[ERROR] Directory not found: {args.dir}")
         return
 
     print(f"\n{'='*60}")
     print(f"Merging results in: {args.dir}")
     print(f"{'='*60}")
     merge_results(args.dir)
-    print(f"\n✅ Merge complete!")
+    print(f"\n[OK] Merge complete!")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 """
-正确性检测分析脚本
-计算 AUROC, AUPR, ECE, Brier Score 等指标
+Analysis script for correctness detection.
+Computes AUROC, AUPR, ECE, Brier score and related metrics.
 """
 import argparse
 import json
@@ -20,7 +20,7 @@ from sklearn.calibration import calibration_curve
 
 
 def load_results(result_dir, dataset_name):
-    """加载所有rank的结果并合并"""
+    """Load and merge the results of every rank."""
     pattern = f"{result_dir}/{dataset_name}_correctness_detection_rank*.json"
     files = glob.glob(pattern)
     
@@ -37,27 +37,27 @@ def load_results(result_dir, dataset_name):
             if config is None:
                 config = data.get('config', {})
     
-    print(f"✓ Loaded {len(all_results)} samples from {len(files)} files")
+    print(f"[OK] Loaded {len(all_results)} samples from {len(files)} files")
     return all_results, config
 
 
 def compute_ece(y_true, y_pred, n_bins=10):
     """
-    计算 Expected Calibration Error (ECE)
+    Compute the Expected Calibration Error (ECE).
     
     ECE = Σ (|acc(b) - conf(b)|) * |b| / n
     """
     y_true = np.array(y_true)
     y_pred = np.array(y_pred)
     
-    # 创建bins
+    # Build the bins
     bin_boundaries = np.linspace(0, 1, n_bins + 1)
     bin_lowers = bin_boundaries[:-1]
     bin_uppers = bin_boundaries[1:]
     
     ece = 0.0
     for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
-        # 找到在这个bin中的样本
+        # Select the samples that fall into this bin
         in_bin = (y_pred > bin_lower) & (y_pred <= bin_upper)
         prop_in_bin = in_bin.mean()
         
@@ -70,11 +70,11 @@ def compute_ece(y_true, y_pred, n_bins=10):
 
 
 def evaluate_method(method_name, scores, labels):
-    """评估单个方法"""
+    """Evaluate a single method."""
     scores = np.array(scores)
     labels = np.array(labels)
     
-    # 过滤掉无效分数
+    # Drop invalid scores
     valid_mask = ~np.isnan(scores) & ~np.isinf(scores)
     scores = scores[valid_mask]
     labels = labels[valid_mask]
@@ -90,7 +90,7 @@ def evaluate_method(method_name, scores, labels):
             "error": "No valid scores"
         }
     
-    # 检查是否只有一个类别
+    # Check whether the labels contain a single class only
     if len(np.unique(labels)) < 2:
         return {
             "method": method_name,
@@ -137,7 +137,7 @@ def evaluate_method(method_name, scores, labels):
 
 
 def plot_roc_curves(results, labels, output_dir, dataset_name):
-    """绘制ROC曲线对比"""
+    """Plot the ROC curve comparison."""
     plt.figure(figsize=(10, 8))
     
     methods = [
@@ -151,10 +151,10 @@ def plot_roc_curves(results, labels, output_dir, dataset_name):
         scores = [r[score_key] for r in results]
         scores = np.array(scores)
         
-        # 过滤无效值
+        # Drop invalid values
         valid_mask = ~np.isnan(scores) & ~np.isinf(scores) & (scores >= 0)
         if score_key == "bmc_score":
-            valid_mask = valid_mask & (scores >= 0)  # BMC可能是-1表示跳过
+            valid_mask = valid_mask & (scores >= 0)  # BMC uses -1 to mark skipped samples
         
         if valid_mask.sum() < 2:
             continue
@@ -180,12 +180,12 @@ def plot_roc_curves(results, labels, output_dir, dataset_name):
     
     output_path = f"{output_dir}/{dataset_name}_roc_curves.png"
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    print(f"✓ ROC curves saved to: {output_path}")
+    print(f"[OK] ROC curves saved to: {output_path}")
     plt.close()
 
 
 def plot_pr_curves(results, labels, output_dir, dataset_name):
-    """绘制Precision-Recall曲线"""
+    """Plot the precision-recall curves."""
     plt.figure(figsize=(10, 8))
     
     methods = [
@@ -199,7 +199,7 @@ def plot_pr_curves(results, labels, output_dir, dataset_name):
         scores = [r[score_key] for r in results]
         scores = np.array(scores)
         
-        # 过滤无效值
+        # Drop invalid values
         valid_mask = ~np.isnan(scores) & ~np.isinf(scores) & (scores >= 0)
         if score_key == "bmc_score":
             valid_mask = valid_mask & (scores >= 0)
@@ -227,12 +227,12 @@ def plot_pr_curves(results, labels, output_dir, dataset_name):
     
     output_path = f"{output_dir}/{dataset_name}_pr_curves.png"
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    print(f"✓ PR curves saved to: {output_path}")
+    print(f"[OK] PR curves saved to: {output_path}")
     plt.close()
 
 
 def plot_calibration_curves(results, labels, output_dir, dataset_name):
-    """绘制校准曲线"""
+    """Plot the calibration curves."""
     fig, axes = plt.subplots(2, 2, figsize=(16, 14))
     axes = axes.flatten()
     
@@ -249,12 +249,12 @@ def plot_calibration_curves(results, labels, output_dir, dataset_name):
         scores = [r[score_key] for r in results]
         scores = np.array(scores)
         
-        # 过滤无效值
+        # Drop invalid values
         valid_mask = ~np.isnan(scores) & ~np.isinf(scores) & (scores >= 0)
         if score_key == "bmc_score":
             valid_mask = valid_mask & (scores >= 0)
         
-        if valid_mask.sum() < 10:  # 至少需要10个样本
+        if valid_mask.sum() < 10:  # at least 10 samples are required
             ax.text(0.5, 0.5, 'Insufficient Data', 
                    ha='center', va='center', fontsize=14)
             ax.set_title(method_name, fontsize=14, fontweight='bold')
@@ -264,17 +264,17 @@ def plot_calibration_curves(results, labels, output_dir, dataset_name):
         labels_valid = np.array(labels)[valid_mask]
         
         try:
-            # 计算校准曲线
+            # Compute the calibration curve
             fraction_of_positives, mean_predicted_value = calibration_curve(
                 labels_valid, scores_valid, n_bins=10, strategy='uniform'
             )
             
-            # 绘制
+            # Plot it
             ax.plot([0, 1], [0, 1], 'k--', linewidth=1, label='Perfect Calibration')
             ax.plot(mean_predicted_value, fraction_of_positives, 'o-', 
                    linewidth=2, markersize=8, label='Method')
             
-            # 计算ECE
+            # Compute the ECE
             ece = compute_ece(labels_valid, scores_valid)
             
             ax.set_xlabel('Mean Predicted Probability', fontsize=12)
@@ -297,15 +297,15 @@ def plot_calibration_curves(results, labels, output_dir, dataset_name):
     
     output_path = f"{output_dir}/{dataset_name}_calibration_curves.png"
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    print(f"✓ Calibration curves saved to: {output_path}")
+    print(f"[OK] Calibration curves saved to: {output_path}")
     plt.close()
 
 
 def plot_metrics_comparison(all_metrics, output_dir):
-    """绘制指标对比柱状图"""
+    """Plot the bar chart comparing the metrics."""
     datasets = list(all_metrics.keys())
     methods = ["Model Confidence", "Self-Consistency", "Self-Evaluation", "BMC (Ours)"]
-    # 🔥 FIX: score_key映射
+    # Mapping to the score keys
     score_keys = ["model_confidence", "self_consistency_score", "self_eval_score", "bmc_score"]
     metrics_names = ["AUROC↑", "AUPR↑", "ECE↓", "Brier↓"]
     
@@ -318,12 +318,12 @@ def plot_metrics_comparison(all_metrics, output_dir):
         x = np.arange(len(datasets))
         width = 0.2
         
-        # 🔥 FIX: 使用score_key匹配
+        # Match methods by score_key
         for i, score_key in enumerate(score_keys):
             values = []
             for dataset in datasets:
                 metrics_list = all_metrics[dataset]
-                # 使用score_key匹配
+                # Match by score_key
                 method_metrics = None
                 for m in metrics_list:
                     if m.get("score_key") == score_key:
@@ -345,7 +345,7 @@ def plot_metrics_comparison(all_metrics, output_dir):
         ax.legend(fontsize=11, loc='best')
         ax.grid(axis='y', alpha=0.3)
         
-        # 为ECE和Brier标注"越低越好"
+        # Mark ECE and Brier as "lower is better"
         if metric_name in ["ece", "brier"]:
             ax.text(0.98, 0.98, '(Lower is Better)', 
                    transform=ax.transAxes, 
@@ -359,18 +359,18 @@ def plot_metrics_comparison(all_metrics, output_dir):
     
     output_path = f"{output_dir}/metrics_comparison.png"
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    print(f"✓ Metrics comparison saved to: {output_path}")
+    print(f"[OK] Metrics comparison saved to: {output_path}")
     plt.close()
 
 
 def print_latex_table(all_metrics):
-    """打印LaTeX格式的表格"""
+    """Print the results as a LaTeX table."""
     print("\n" + "="*80)
-    print("📊 LaTeX Table")
+    print("LaTeX Table")
     print("="*80 + "\n")
     
     datasets = list(all_metrics.keys())
-    # 🔥 FIX: 使用score_key而不是method_name来匹配
+    # Match on score_key rather than method_name
     methods_map = {
         "Model Confidence": "model_confidence",
         "Self-Consistency": "self_consistency_score", 
@@ -378,26 +378,26 @@ def print_latex_table(all_metrics):
         "BMC (Ours)": "bmc_score",
     }
     
-    # 🔥 FIX: 动态构建表头
+    # Build the header dynamically
     num_datasets = len(datasets)
     
-    # 表头
+    # Table header
     print("\\begin{table}[h]")
     print("\\centering")
     print("\\caption{Correctness Detection Performance}")
     
-    # 构建列格式：第一列左对齐，每个数据集4列
+    # Column format: first column left-aligned, 4 columns per dataset
     col_format = "l|" + "|".join(["cccc"] * num_datasets)
     print(f"\\begin{{tabular}}{{{col_format}}}")
     print("\\hline")
     
-    # 第一行：数据集名称（跨4列）
+    # First row: dataset names (spanning 4 columns)
     header_line1 = "\\multirow{2}{*}{Method}"
     for dataset in datasets:
         header_line1 += f" & \\multicolumn{{4}}{{{'c|' if dataset != datasets[-1] else 'c'}}}{{{dataset.upper()}}}"
     print(header_line1 + " \\\\")
     
-    # 第二行：指标名称
+    # Second row: metric names
     header_line2 = ""
     for i, dataset in enumerate(datasets):
         sep = "|" if i < num_datasets - 1 else ""
@@ -405,13 +405,13 @@ def print_latex_table(all_metrics):
     print(header_line2 + " \\\\")
     print("\\hline")
     
-    # 🔥 FIX: 数据行 - 使用score_key匹配
+    # Data rows - matched by score_key
     for method_name, score_key in methods_map.items():
         row = [method_name]
         
         for dataset in datasets:
             metrics_list = all_metrics[dataset]
-            # 🔥 使用score_key匹配
+            # Match by score_key
             method_metrics = None
             for m in metrics_list:
                 if m.get("score_key") == score_key:
@@ -437,12 +437,12 @@ def print_latex_table(all_metrics):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--result_dir", type=str, required=True,
-                       help="结果目录")
+                       help="Directory containing the result files")
     parser.add_argument("--datasets", type=str, nargs='+', 
                        default=["gsm8k", "math", "gpqa", "arc"],
-                       help="要分析的数据集")
+                       help="Datasets to analyze")
     parser.add_argument("--output_dir", type=str, default=None,
-                       help="输出目录（默认与result_dir相同）")
+                       help="Output directory (defaults to result_dir)")
     
     args = parser.parse_args()
     
@@ -452,7 +452,7 @@ if __name__ == "__main__":
     os.makedirs(args.output_dir, exist_ok=True)
     
     print(f"\n{'='*80}")
-    print("📊 Correctness Detection Analysis")
+    print("Correctness Detection Analysis")
     print(f"{'='*80}\n")
     
     all_metrics = {}
@@ -462,17 +462,17 @@ if __name__ == "__main__":
         print(f"Dataset: {dataset_name.upper()}")
         print(f"{'='*80}\n")
         
-        # 加载结果
+        # Load the results
         try:
             results, config = load_results(args.result_dir, dataset_name)
         except FileNotFoundError as e:
-            print(f"⚠️  {e}")
+            print(f"[WARN] {e}")
             continue
         
-        # 提取标签
+        # Extract the labels
         labels = [r['is_correct'] for r in results]
         
-        # 评估各方法
+        # Evaluate each method
         methods = [
             ("model_confidence", "Model Confidence"),
             ("self_consistency_score", "Self-Consistency"),
@@ -487,9 +487,9 @@ if __name__ == "__main__":
         
         for score_key, method_name in methods:
             scores = [r[score_key] for r in results]
-            # 🔥 FIX: 同时保存score_key和method_name
+            # Keep both score_key and method_name
             metrics = evaluate_method(method_name, scores, labels)
-            metrics['score_key'] = score_key  # 🔥 添加score_key用于后续查找
+            metrics['score_key'] = score_key  # used for lookups further down
             dataset_metrics.append(metrics)
             
             if "error" in metrics:
@@ -500,27 +500,27 @@ if __name__ == "__main__":
         
         all_metrics[dataset_name] = dataset_metrics
         
-        # 绘图
-        print(f"\n📈 Generating plots for {dataset_name}...")
+        # Plots
+        print(f"\nGenerating plots for {dataset_name}...")
         plot_roc_curves(results, labels, args.output_dir, dataset_name)
         plot_pr_curves(results, labels, args.output_dir, dataset_name)
         plot_calibration_curves(results, labels, args.output_dir, dataset_name)
     
-    # 综合对比
+    # Overall comparison
     if len(all_metrics) > 1:
-        print(f"\n📊 Generating overall comparison...")
+        print(f"\nGenerating overall comparison...")
         plot_metrics_comparison(all_metrics, args.output_dir)
     
-    # 打印LaTeX表格
+    # Print the LaTeX table
     print_latex_table(all_metrics)
     
-    # 保存JSON
+    # Save the JSON summary
     output_json = f"{args.output_dir}/metrics_summary.json"
     with open(output_json, 'w') as f:
         json.dump(all_metrics, f, indent=2)
-    print(f"\n✓ Metrics summary saved to: {output_json}")
+    print(f"\n[OK] Metrics summary saved to: {output_json}")
     
     print(f"\n{'='*80}")
-    print("✅ Analysis completed!")
+    print("[OK] Analysis completed!")
     print(f"All results saved to: {args.output_dir}")
     print(f"{'='*80}\n")

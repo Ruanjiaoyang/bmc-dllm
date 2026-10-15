@@ -1,6 +1,6 @@
 """
-合并分布式评估的结果
-将多个GPU的输出合并为一个完整的结果文件
+Merge the results of a distributed evaluation.
+Combines the outputs of multiple GPUs into a single result file.
 """
 import argparse
 import json
@@ -11,44 +11,44 @@ from collections import defaultdict
 
 def merge_results(result_dir, dataset, pattern=None):
     """
-    合并多个GPU的评估结果
+    Merge the evaluation results produced by multiple GPUs.
     
     Args:
-        result_dir: 结果目录
-        dataset: 数据集名称
-        pattern: 文件匹配模式（可选）
+        result_dir: directory containing the result files
+        dataset: dataset name
+        pattern: file matching pattern (optional)
     """
     if pattern is None:
-        # 默认匹配模式：dataset_*_rank_generations.json
+        # Default pattern: dataset_*_rank_generations.json
         pattern = f"{dataset}_*_generations.json"
     
     search_pattern = os.path.join(result_dir, pattern)
     result_files = sorted(glob.glob(search_pattern))
     
     if not result_files:
-        print(f"❌ No result files found matching: {search_pattern}")
+        print(f"[ERROR] No result files found matching: {search_pattern}")
         return
     
     print(f"Found {len(result_files)} result files:")
     for f in result_files:
         print(f"  - {os.path.basename(f)}")
     
-    # 按配置分组（去掉rank后缀）
+    # Group files by configuration (stripping the rank suffix)
     config_groups = defaultdict(list)
     for f in result_files:
-        # 提取配置名（去掉_rank_generations.json）
+        # Extract the configuration name (drop the _rank_generations.json suffix)
         basename = os.path.basename(f)
-        # 找到最后一个数字（rank）之前的部分
+        # Keep the part before the trailing rank number
         parts = basename.rsplit('_', 2)  # ['prefix', 'rank', 'generations.json']
         if len(parts) >= 3:
             config_name = parts[0]
             config_groups[config_name].append(f)
         else:
-            print(f"⚠️  Skipping file with unexpected format: {basename}")
+            print(f"[WARN] Skipping file with unexpected format: {basename}")
     
     print(f"\nFound {len(config_groups)} configuration(s)")
     
-    # 合并每个配置的结果
+    # Merge the results of each configuration
     for config_name, files in config_groups.items():
         print(f"\n{'='*60}")
         print(f"Merging configuration: {config_name}")
@@ -61,17 +61,17 @@ def merge_results(result_dir, dataset, pattern=None):
         total_gen_time = 0.0
         total_bmc_time = 0.0
         
-        # 读取所有文件
+        # Read every file
         for file_path in sorted(files):
             print(f"Reading: {os.path.basename(file_path)}")
             try:
                 with open(file_path, 'r') as f:
                     data = json.load(f)
                 
-                # 合并generations
+                # Merge the generations
                 all_generations.extend(data.get('generations', []))
                 
-                # 累加metrics
+                # Accumulate the metrics
                 metrics = data.get('metrics', {})
                 total_samples += metrics.get('total_processed', 0)
                 
@@ -83,10 +83,10 @@ def merge_results(result_dir, dataset, pattern=None):
                 total_bmc_time += metrics.get('bmc_time', 0.0)
                 
             except Exception as e:
-                print(f"  ⚠️  Error reading {file_path}: {e}")
+                print(f"  [WARN] Error reading {file_path}: {e}")
                 continue
         
-        # 计算平均值
+        # Compute the averages
         num_files = len(files)
         avg_wall_time = total_wall_time / num_files if num_files > 0 else 0.0
         avg_gen_time = total_gen_time / num_files if num_files > 0 else 0.0
@@ -94,11 +94,11 @@ def merge_results(result_dir, dataset, pattern=None):
         
         accuracy = total_correct / total_samples if total_samples > 0 else 0.0
         
-        # 读取第一个文件的配置信息
+        # Read the configuration from the first file
         with open(files[0], 'r') as f:
             first_data = json.load(f)
         
-        # 构建合并后的结果
+        # Assemble the merged result
         merged_result = {
             "generations": all_generations,
             "metrics": {
@@ -123,13 +123,13 @@ def merge_results(result_dir, dataset, pattern=None):
             "num_gpus": num_files,
         }
         
-        # 保存合并后的结果
+        # Write the merged result
         output_file = os.path.join(result_dir, f"{config_name}_merged.json")
         with open(output_file, 'w') as f:
             json.dump(merged_result, f, indent=2)
         
-        print(f"\n✓ Merged results saved to: {output_file}")
-        print(f"\n📊 Summary:")
+        print(f"\n[OK] Merged results saved to: {output_file}")
+        print(f"\nSummary:")
         print(f"  Total samples: {total_samples}")
         print(f"  Total correct: {total_correct}")
         print(f"  Accuracy: {accuracy:.2%}")
@@ -151,7 +151,7 @@ def main():
     args = parser.parse_args()
     
     if not os.path.exists(args.result_dir):
-        print(f"❌ Result directory not found: {args.result_dir}")
+        print(f"[ERROR] Result directory not found: {args.result_dir}")
         return
     
     merge_results(args.result_dir, args.dataset, args.pattern)

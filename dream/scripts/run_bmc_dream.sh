@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # ============================================================
-# 🚀 Dream Model BMC - 8卡并行评估脚本
-# 参考LLaDA的实现，支持多GPU分布式评估
+# Dream Model BMC - 8-GPU parallel evaluation script
+# Follows the LLaDA implementation; supports multi-GPU distributed evaluation
 # ============================================================
 
 # ============================================================
-# 设置 PYTHONPATH - 确保所有 rank 都能找到模块
+# Set PYTHONPATH so that every rank can resolve the modules
 # ============================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$SCRIPT_DIR"
@@ -14,7 +14,7 @@ PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 export PYTHONPATH="${PROJECT_ROOT}/eval_bmc:${PROJECT_ROOT}:${SCRIPT_DIR}:${PYTHONPATH}"
 
 echo "========================================================================"
-echo "🔧 Environment Setup"
+echo "Environment Setup"
 echo "========================================================================"
 echo "SCRIPT_DIR: $SCRIPT_DIR"
 echo "PROJECT_ROOT: $PROJECT_ROOT"
@@ -28,14 +28,14 @@ echo ""
 GPU_IDS=(0 1 2 3 4 5 6 7)
 MASTER_PORT=29500
 
-# 模型路径
+# Model path
 MODEL_PATH="${MODEL_PATH:-Dream-org/Dream-v0-Instruct-7B}"
 
-# 语义模型路径（可选，留空则从HuggingFace下载）
+# Semantic model path (optional; leave empty to download from HuggingFace)
 SEMANTIC_MODEL_PATH=""
 
-# 实验配置
-# 支持的任务: gsm8k, humaneval, mbpp, math
+# Experiment configuration
+# Supported tasks: gsm8k, humaneval, mbpp, math
 read -ra TASKS <<< "${TASKS:-gsm8k math arc gpqa}"
 T_PROBE_VALUES=(0.9)
 GEN_LENGTH=128
@@ -45,23 +45,23 @@ TEMPERATURE=0.1
 TOP_P=0.9
 ALG="entropy"
 
-# BMC固定参数
+# Fixed BMC parameters
 NUM_REVERSE_STEPS=16
 NUM_SAMPLES=4
 
-# 🔥 优化权重路径（可选）
-# 留空则自动搜索任务对应的最佳权重文件
-# 如果指定路径，将使用该权重文件
-# 如果都没找到，将使用aggressive_scoring策略
+# Optimized weights path (optional)
+# If left empty, the best weight file for the task is searched for automatically
+# If a path is given, that weight file is used
+# If neither is found, the aggressive_scoring strategy is used
 # 
-# 自动搜索规则：
-#   1. 搜索 bmc_optimization_{TASK}_*/optimization_results.json
-#   2. 选择 ROC-AUC 最高的权重文件
+# Auto-search rules:
+#   1. Search bmc_optimization_{TASK}_*/optimization_results.json
+#   2. Pick the weight file with the highest ROC-AUC
 #
-# 示例（手动指定）:
+# Example (manual):
 #   OPTIMIZED_WEIGHTS_PATH="bmc_optimization_gsm8k_20260104_164047/optimization_results.json"
 #
-# 示例（自动搜索，推荐）:
+# Example (auto-search, recommended):
 #   OPTIMIZED_WEIGHTS_PATH=""
 OPTIMIZED_WEIGHTS_PATH=""
 
@@ -77,7 +77,7 @@ GPU_LIST=$(IFS=,; echo "${GPU_IDS[*]}")
 NUM_GPUS=${#GPU_IDS[@]}
 
 echo "========================================================================"
-echo "🚀 Dream Model BMC - 8卡并行评估"
+echo "Dream Model BMC - 8-GPU parallel evaluation"
 echo "========================================================================"
 echo "Using GPUs: $GPU_LIST (nproc_per_node=$NUM_GPUS)"
 echo "Model: $MODEL_PATH"
@@ -112,17 +112,17 @@ run_experiment() {
   local task=$1
   local t_probe=$2
   
-  # 格式化 t_probe 用于文件名
+  # Format t_probe for use in file names
   local t_probe_str=$(printf "%.1f" $t_probe | tr '.' '_')
   local suffix="t${t_probe_str}_ns${NUM_SAMPLES}_aggressive"
   
   echo ""
   echo "========================================================================"
-  echo "📊 Running: Task=$task, t_probe=$t_probe"
+  echo "Running: Task=$task, t_probe=$t_probe"
   echo "    Suffix: $suffix"
   echo "========================================================================"
   
-  # 构建命令
+  # Build the command
   local cmd="CUDA_VISIBLE_DEVICES=$GPU_LIST torchrun \
     --nproc_per_node $NUM_GPUS \
     --master_port $MASTER_PORT \
@@ -143,31 +143,31 @@ run_experiment() {
     --model_path \"$MODEL_PATH\" \
     --suffix \"$suffix\""
   
-  # 添加语义模型路径（如果设置）
+  # Add the semantic model path (if set)
   if [ ! -z "$SEMANTIC_MODEL_PATH" ]; then
     cmd="$cmd --semantic_model_path \"$SEMANTIC_MODEL_PATH\""
   fi
   
-  # 🔥 NEW: 添加优化权重路径（如果设置）
+  # Add the optimized weights path (if set)
   if [ ! -z "$OPTIMIZED_WEIGHTS_PATH" ]; then
     if [ -f "$OPTIMIZED_WEIGHTS_PATH" ]; then
       cmd="$cmd --optimized_weights_path \"$OPTIMIZED_WEIGHTS_PATH\""
-      echo "  ✅ Using optimized weights (manual): $OPTIMIZED_WEIGHTS_PATH"
+      echo "  [OK] Using optimized weights (manual): $OPTIMIZED_WEIGHTS_PATH"
     else
-      echo "  ⚠️  Warning: Optimized weights file not found: $OPTIMIZED_WEIGHTS_PATH"
+      echo "  [WARN] Optimized weights file not found: $OPTIMIZED_WEIGHTS_PATH"
       echo "  Continuing with auto-search or aggressive_scoring..."
     fi
   else
-    echo "  🔍 Auto-search enabled: will search for best weights in bmc_optimization_${task}_*/"
+    echo "  Auto-search enabled: will search for best weights in bmc_optimization_${task}_*/"
   fi
   
-  # 执行
+  # Execute
   eval $cmd
   
   if [ $? -eq 0 ]; then
-    echo "✓ Completed: $task with t_probe=$t_probe"
+    echo "[OK] Completed: $task with t_probe=$t_probe"
   else
-    echo "❌ Failed: $task with t_probe=$t_probe"
+    echo "[ERROR] Failed: $task with t_probe=$t_probe"
   fi
   echo "------------------------------------------------------------------------"
 }
@@ -177,14 +177,14 @@ run_experiment() {
 # ============================================================
 echo ""
 echo "========================================================================"
-echo "📊 Starting BMC Experiments"
+echo "Starting BMC Experiments"
 echo "========================================================================"
 
 experiment_count=0
 for task in "${TASKS[@]}"; do
   echo ""
   echo "========================================================================"
-  echo "🎯 Task: $task"
+  echo "Task: $task"
   echo "========================================================================"
   
   for t_probe in "${T_PROBE_VALUES[@]}"; do
@@ -200,12 +200,12 @@ done
 # ============================================================
 echo ""
 echo "========================================================================"
-echo "✅ All Experiments Completed!"
+echo "[OK] All Experiments Completed!"
 echo "========================================================================"
 echo ""
 echo "Results saved to: results_bmc/"
 echo ""
-echo "📊 Experiment Summary:"
+echo "Experiment Summary:"
 echo "  - Tasks: ${#TASKS[@]} (${TASKS[@]})"
 echo "  - t_probe values: ${#T_PROBE_VALUES[@]} (${T_PROBE_VALUES[@]})"
 echo "  - Total experiments: $experiment_count"

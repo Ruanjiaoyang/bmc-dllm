@@ -173,7 +173,7 @@ def main():
     args = parser.parse_args()
 
     if not os.path.isdir(args.dir):
-        print(f"❌ Directory not found: {args.dir}")
+        print(f"[ERROR] Directory not found: {args.dir}")
         return
 
     methods = args.methods.split(",") if args.methods else None

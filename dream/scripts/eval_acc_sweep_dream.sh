@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ============================================================
-# Dream Model 准确率测评脚本（修复版）
-# 🔥 使用正确的 chat template + system prompt 格式
+# Dream Model accuracy evaluation sweep
+# Uses the correct chat template + system prompt format
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,10 +30,10 @@ GPU_LIST=$(IFS=,; echo "${GPU_IDS[*]}")
 NUM_GPUS=${#GPU_IDS[@]}
 
 echo "========================================================================"
-echo "🚀 Dream Model Accuracy Sweep (FIXED VERSION)"
+echo "Dream Model Accuracy Sweep (FIXED VERSION)"
 echo "========================================================================"
-echo "🔥 Using: Chat Template + System Prompt + <reasoning> tag"
-echo "🔥 Diffusion steps = Gen length (dynamic)"
+echo "Using: Chat Template + System Prompt + <reasoning> tag"
+echo "Diffusion steps = Gen length (dynamic)"
 echo "Tasks: ${TASKS[@]}"
 echo "Gen lengths: ${GEN_LENGTHS[@]}"
 echo "Output: $OUTPUT_DIR"
@@ -45,12 +45,12 @@ run_experiment() {
   local task=$1
   local gen_length=$2
   
-  # 🔥 动态设置 diffusion_steps = gen_length
+  # Dynamically set diffusion_steps = gen_length
   local diffusion_steps=$gen_length
   
   echo ""
   echo "========================================================================"
-  echo "📊 Running: $task - gen_length=$gen_length, diffusion_steps=$diffusion_steps"
+  echo "Running: $task - gen_length=$gen_length, diffusion_steps=$diffusion_steps"
   echo "========================================================================"
   
   CUDA_VISIBLE_DEVICES=$GPU_LIST torchrun \
@@ -68,9 +68,9 @@ run_experiment() {
     --output_dir "$OUTPUT_DIR"
   
   if [ $? -eq 0 ]; then
-    echo "✓ Completed: $task - gen_length=$gen_length"
+    echo "[OK] Completed: $task - gen_length=$gen_length"
   else
-    echo "❌ Failed: $task - gen_length=$gen_length"
+    echo "[ERROR] Failed: $task - gen_length=$gen_length"
   fi
   
   sleep 2
@@ -86,7 +86,7 @@ done
 # Merge results
 echo ""
 echo "========================================================================"
-echo "🔄 Merging Results"
+echo "Merging Results"
 echo "========================================================================"
 
 for task in "${TASKS[@]}"; do
@@ -102,7 +102,7 @@ done
 # Summarize
 echo ""
 echo "========================================================================"
-echo "📈 Generating Summary"
+echo "Generating Summary"
 echo "========================================================================"
 
 python summarize_acc_results.py \
@@ -111,7 +111,7 @@ python summarize_acc_results.py \
 
 echo ""
 echo "========================================================================"
-echo "✅ All Done!"
+echo "[OK] All Done!"
 echo "========================================================================"
 echo "Results: $OUTPUT_DIR/accuracy_summary_${TIMESTAMP}.csv"
 echo "========================================================================"

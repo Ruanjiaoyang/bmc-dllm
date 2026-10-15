@@ -1,5 +1,5 @@
 """
-分析对比实验结果，生成表格
+Analyze comparison experiment results and generate tables.
 """
 import json
 import os
@@ -9,7 +9,7 @@ import numpy as np
 
 
 def load_results(results_dir: str = "results_comparison") -> Dict:
-    """加载所有实验结果（对齐LLaDA）"""
+    """Load all experiment results (aligned with the LLaDA setup)."""
     results = {}
     
     datasets = ["gsm8k", "math", "gpqa", "arc"]
@@ -27,25 +27,25 @@ def load_results(results_dir: str = "results_comparison") -> Dict:
     for dataset in datasets:
         results[dataset] = {}
         for method in methods:
-            # 🔥 修复：加载aggregated.json文件（parse脚本生成的）
+            # Load the aggregated.json file produced by the parse script
             aggregated_file = f"{results_dir}/{dataset}_{method}_aggregated.json"
             
             if os.path.exists(aggregated_file):
                 try:
                     with open(aggregated_file, 'r') as f:
                         data = json.load(f)
-                        # 🔥 直接使用完整数据（包含accuracy, avg_samples, avg_time_per_sample等）
+                        # Keep the full record (accuracy, avg_samples, avg_time_per_sample, ...)
                         results[dataset][method] = data
                 except Exception as e:
-                    print(f"⚠️  Error loading {aggregated_file}: {e}")
+                    print(f"[WARN] Error loading {aggregated_file}: {e}")
             else:
-                print(f"⚠️  File not found: {aggregated_file}")
+                print(f"[WARN] File not found: {aggregated_file}")
     
     return results
 
 
 def format_method_name(method: str) -> str:
-    """格式化方法名称"""
+    """Format a method key into a human-readable name."""
     name_map = {
         "greedy": "Greedy (no correction)",
         "self_consistency_N3": "Self-Consistency (N=3)",
@@ -60,13 +60,13 @@ def format_method_name(method: str) -> str:
 
 
 def generate_comparison_table(results: Dict):
-    """生成对比表格（Markdown格式）"""
+    """Generate the comparison table in Markdown format."""
     
     print("\n" + "=" * 100)
-    print("📊 完整对比实验结果")
+    print("Full Comparison Results")
     print("=" * 100 + "\n")
     
-    # 方法列表
+    # Methods to report
     methods = [
         "greedy",
         "self_consistency_N3",
@@ -80,13 +80,13 @@ def generate_comparison_table(results: Dict):
     
     datasets = ["gsm8k", "math", "gpqa", "arc"]
     
-    # 表头
+    # Table header
     print("| Method | GSM8K | | | MATH | | |")
     print("|--------|-------|-----------|--------|------|-----------|--------|")
     print("| | Acc ↑ | Resamples | time (s) | Acc ↑ | Resamples | time (s) |")
     print("|--------|-------|-----------|--------|------|-----------|--------|")
     
-    # 每个方法的结果
+    # One row per method
     for method in methods:
         row = [format_method_name(method)]
         
@@ -109,10 +109,10 @@ def generate_comparison_table(results: Dict):
 
 
 def generate_detailed_analysis(results: Dict):
-    """生成详细分析"""
+    """Generate the detailed per-dataset analysis."""
     
     print("\n" + "=" * 100)
-    print("📈 详细分析")
+    print("Detailed Analysis")
     print("=" * 100 + "\n")
     
     datasets = ["gsm8k", "math", "gpqa", "arc"]
@@ -123,7 +123,7 @@ def generate_detailed_analysis(results: Dict):
         
         print(f"\n### {dataset.upper()}\n")
         
-        # 提取各方法的准确率
+        # Accuracy of each method
         greedy_acc = results[dataset].get('greedy', {}).get('accuracy', 0.0) * 100
         
         methods = [
@@ -136,7 +136,7 @@ def generate_detailed_analysis(results: Dict):
             ("bmc_guided", "BMC-Guided (Ours)")
         ]
         
-        print(f"**基准 (Greedy)**: {greedy_acc:.4f}%\n")
+        print(f"**Baseline (Greedy)**: {greedy_acc:.4f}%\n")
         
         for method_key, method_name in methods:
             if method_key in results[dataset]:
@@ -146,7 +146,7 @@ def generate_detailed_analysis(results: Dict):
                 resamples = metrics.get('avg_samples', 0.0)
                 time_s = metrics.get('avg_time_per_sample', 0.0)
                 
-                symbol = "📈" if improvement > 0 else "📉" if improvement < 0 else "➡️"
+                symbol = "[UP]" if improvement > 0 else "[DOWN]" if improvement < 0 else "[SAME]"
                 
                 print(f"**{method_name}**")
                 print(f"  - Accuracy: {acc:.4f}% {symbol} ({improvement:+.4f}%)")
@@ -158,17 +158,17 @@ def generate_detailed_analysis(results: Dict):
 
 
 def generate_efficiency_analysis(results: Dict):
-    """生成效率分析（对齐LLaDA - 包含时间效率和采样效率）"""
+    """Generate the efficiency analysis (time and sample efficiency, as in LLaDA)."""
     
     print("\n" + "=" * 100)
-    print("⚡ 效率分析")
+    print("Efficiency Analysis")
     print("=" * 100 + "\n")
     
-    print("📌 说明：")
+    print("Notes:")
     print("  - Eff_T = Time Efficiency = (Δ Accuracy) / Time (points/sec)")
     print("  - Eff_S = Sample Efficiency = (Δ Accuracy) / (Δ Samples)")
-    print("  - 前4个方法使用 batch_size=8 并行加速")
-    print("  - BMC-Guided 因自适应特性使用 batch_size=1\n")
+    print("  - The first 4 methods run with batch_size=8 for parallel speedup")
+    print("  - BMC-Guided runs with batch_size=1 because it is adaptive\n")
     
     datasets = ["gsm8k", "math", "gpqa", "arc"]
     
@@ -178,15 +178,15 @@ def generate_efficiency_analysis(results: Dict):
         
         print(f"\n### {dataset.upper()}\n")
         
-        # 获取baseline准确率
+        # Baseline accuracy
         if 'greedy' not in results[dataset]:
-            print("⚠️  Baseline (Greedy) not found")
+            print("[WARN] Baseline (Greedy) not found")
             continue
         
         baseline_acc = results[dataset]['greedy'].get('accuracy', 0.0) * 100
         print(f"Baseline (Greedy): {baseline_acc:.4f}%\n")
         
-        # 计算每个方法的效率指标
+        # Compute efficiency metrics for each method
         methods_data = []
         
         for method_key in results[dataset]:
@@ -201,10 +201,10 @@ def generate_efficiency_analysis(results: Dict):
             
             delta_acc = acc - baseline_acc
             
-            # 🔥 时间效率 = (准确率提升) / (时间)
+            # Time efficiency = (accuracy gain) / (time)
             eff_time = delta_acc / time_s if (time_s > 0 and has_timing) else 0.0
             
-            # 采样效率 = (准确率提升) / (采样数增量)
+            # Sample efficiency = (accuracy gain) / (extra samples)
             baseline_samples = results[dataset]['greedy'].get('avg_samples', 1.0)
             delta_samples = resamples - baseline_samples
             eff_samples = delta_acc / delta_samples if delta_samples > 0 else 0.0
@@ -221,10 +221,10 @@ def generate_efficiency_analysis(results: Dict):
             })
         
         if not methods_data:
-            print("⚠️  No methods to compare")
+            print("[WARN] No methods to compare")
             continue
         
-        # 按时间效率排序（如果有时间记录）
+        # Sort by time efficiency when timing data is available
         has_any_timing = any(d['has_timing'] for d in methods_data)
         
         if has_any_timing:
@@ -246,24 +246,24 @@ def generate_efficiency_analysis(results: Dict):
             
             print()
             
-            # 找到最佳方法
+            # Report the best method
             methods_with_time = [d for d in methods_data if d['has_timing']]
             if methods_with_time:
                 best_eff_time = max(methods_with_time, key=lambda x: x['eff_time'])
-                print(f"⚡ Best Time Efficiency: {format_method_name(best_eff_time['method'])}")
+                print(f"Best Time Efficiency: {format_method_name(best_eff_time['method'])}")
                 print(f"   Efficiency: {best_eff_time['eff_time']:.4f} pts/sec")
                 print(f"   Accuracy: {best_eff_time['acc']:.4f}% (+{best_eff_time['delta_acc']:.4f}%)")
                 print(f"   Time: {best_eff_time['time']:.4f}s")
                 print()
             
             best_eff_samples = max(methods_data, key=lambda x: x['eff_samples'])
-            print(f"🎯 Best Sample Efficiency: {format_method_name(best_eff_samples['method'])}")
+            print(f"Best Sample Efficiency: {format_method_name(best_eff_samples['method'])}")
             print(f"   Efficiency: {best_eff_samples['eff_samples']:.4f} pts/sample")
             print(f"   Accuracy: {best_eff_samples['acc']:.4f}% (+{best_eff_samples['delta_acc']:.4f}%)")
             print(f"   Samples: {best_eff_samples['resamples']:.4f}")
             print()
         else:
-            # 没有时间记录，只显示采样效率
+            # No timing data: report sample efficiency only
             methods_sorted = sorted(methods_data, key=lambda x: x['eff_samples'], reverse=True)
             
             print(f"{'Method':<35} {'Acc':>7} {'Δ Acc':>8} {'Samples':>9} {'Eff_S':>10}")
@@ -275,17 +275,17 @@ def generate_efficiency_analysis(results: Dict):
                       f"{data['resamples']:9.4f} {data['eff_samples']:10.4f}")
             
             print()
-            print("⚠️  No timing information available for this dataset")
+            print("[WARN] No timing information available for this dataset")
             print()
         
         print("-" * 100 + "\n")
 
 
 def generate_statistical_summary(results: Dict):
-    """生成统计摘要"""
+    """Generate the statistical summary."""
     
     print("\n" + "=" * 100)
-    print("📊 统计摘要")
+    print("Statistical Summary")
     print("=" * 100 + "\n")
     
     datasets = ["gsm8k", "math", "gpqa", "arc"]
@@ -298,7 +298,7 @@ def generate_statistical_summary(results: Dict):
         
         greedy_acc = results[dataset].get('greedy', {}).get('accuracy', 0.0) * 100
         
-        # 找到最佳方法
+        # Find the best method
         best_method = None
         best_acc = greedy_acc
         
@@ -315,28 +315,28 @@ def generate_statistical_summary(results: Dict):
             improvement = best_acc - greedy_acc
             avg_resamples = best_metrics.get('avg_samples', 0.0)
             
-            print(f"🏆 **最佳方法**: {format_method_name(best_method)}")
-            print(f"   - 准确率: {best_acc:.4f}% (提升 {improvement:.4f}%)")
-            print(f"   - 平均采样次数: {avg_resamples:.4f}")
+            print(f"**Best method**: {format_method_name(best_method)}")
+            print(f"   - Accuracy: {best_acc:.4f}% (gain {improvement:.4f}%)")
+            print(f"   - Avg samples: {avg_resamples:.4f}")
             print()
         
-        # BMC-Guided特殊统计（如果有）
+        # Extra statistics for BMC-Guided, when present
         if 'bmc_guided' in results[dataset]:
             bmc_metrics = results[dataset]['bmc_guided']
             bmc_acc = bmc_metrics.get('accuracy', 0.0) * 100
             bmc_resamples = bmc_metrics.get('avg_samples', 0.0)
             
-            print(f"💡 **BMC-Guided (Ours)**:")
-            print(f"   - 准确率: {bmc_acc:.4f}%")
-            print(f"   - 平均采样次数: {bmc_resamples:.4f} (动态调整)")
-            print(f"   - 相比固定10次采样，节省: {(10 - bmc_resamples) / 10 * 100:.4f}% 的计算")
+            print(f"**BMC-Guided (Ours)**:")
+            print(f"   - Accuracy: {bmc_acc:.4f}%")
+            print(f"   - Avg samples: {bmc_resamples:.4f} (adaptive)")
+            print(f"   - Compute saved vs. a fixed budget of 10 samples: {(10 - bmc_resamples) / 10 * 100:.4f}%")
             print()
         
         print("-" * 80 + "\n")
 
 
 def save_latex_table(results: Dict, output_file: str = "comparison_table.tex"):
-    """保存LaTeX格式的表格"""
+    """Save the comparison table in LaTeX format."""
     
     methods = [
         "greedy",
@@ -394,7 +394,7 @@ def save_latex_table(results: Dict, output_file: str = "comparison_table.tex"):
     with open(output_file, 'w') as f:
         f.write(latex_content)
     
-    print(f"\n✅ LaTeX table saved to: {output_file}\n")
+    print(f"\n[OK] LaTeX table saved to: {output_file}\n")
 
 
 if __name__ == "__main__":
@@ -405,24 +405,24 @@ if __name__ == "__main__":
     parser.add_argument("--save_latex", action="store_true", help="Save LaTeX table")
     args = parser.parse_args()
     
-    # 加载结果
-    print("\n🔍 Loading results...")
+    # Load results
+    print("\nLoading results...")
     results = load_results(args.results_dir)
     
     if not results:
-        print("❌ No results found!")
+        print("[ERROR] No results found!")
         exit(1)
     
-    # 生成各种分析
+    # Generate the analyses
     generate_comparison_table(results)
     generate_detailed_analysis(results)
     generate_efficiency_analysis(results)
     generate_statistical_summary(results)
     
-    # 保存LaTeX表格
+    # Save the LaTeX table
     if args.save_latex:
         save_latex_table(results)
     
     print("\n" + "=" * 100)
-    print("✅ Analysis Complete!")
+    print("[OK] Analysis Complete!")
     print("=" * 100 + "\n")

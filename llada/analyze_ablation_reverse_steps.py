@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-扩散过程消融实验分析
-分析不同T_backward (num_reverse_steps)的影响
+Diffusion process ablation analysis.
+Measures the effect of varying T_backward (num_reverse_steps).
 """
 import argparse
 import json
@@ -15,7 +15,7 @@ from typing import Dict, List
 
 
 def load_timing_data(result_base_dir: str) -> Dict[int, float]:
-    """加载推理时间数据"""
+    """Load inference timing data."""
     timing_file = os.path.join(result_base_dir, "timing_results.csv")
     timing_dict = {}
     
@@ -28,18 +28,18 @@ def load_timing_data(result_base_dir: str) -> Dict[int, float]:
                     time_sec = float(row['inference_time_seconds'])
                     timing_dict[t_backward] = time_sec
         except Exception as e:
-            print(f"⚠️  Failed to load timing data: {e}")
+            print(f"[WARN] Failed to load timing data: {e}")
     
     return timing_dict
 
 
 def load_results_from_dir(result_dir: str) -> Dict:
-    """加载单个实验目录的所有GPU结果"""
+    """Load the per-GPU result files of a single experiment directory."""
     pattern = os.path.join(result_dir, "*_generations.json")
     files = glob.glob(pattern)
     
     if not files:
-        print(f"⚠️  No result files found in {result_dir}")
+        print(f"[WARN] No result files found in {result_dir}")
         return None
     
     all_generations = []
@@ -56,7 +56,7 @@ def load_results_from_dir(result_dir: str) -> Dict:
                 if bmc_config is None and 'bmc_config' in data:
                     bmc_config = data['bmc_config']
         except Exception as e:
-            print(f"⚠️  Error loading {filepath}: {e}")
+            print(f"[WARN] Error loading {filepath}: {e}")
             continue
     
     if not all_generations:
@@ -70,7 +70,7 @@ def load_results_from_dir(result_dir: str) -> Dict:
 
 
 def compute_metrics(generations: List[Dict]) -> Dict:
-    """计算评估指标"""
+    """Compute evaluation metrics."""
     if not generations:
         return {}
     
@@ -112,7 +112,7 @@ def compute_metrics(generations: List[Dict]) -> Dict:
                             (np.mean(wrong_scores) if wrong_scores else 0.0),
             })
         except Exception as e:
-            print(f"⚠️  Error computing AUC: {e}")
+            print(f"[WARN] Error computing AUC: {e}")
             metrics.update({'roc_auc': -1, 'pr_auc': -1, 'score_gap': 0.0})
     else:
         metrics.update({'roc_auc': -1, 'pr_auc': -1, 'score_gap': 0.0})
@@ -121,20 +121,20 @@ def compute_metrics(generations: List[Dict]) -> Dict:
 
 
 def analyze_diffusion_ablation(result_base_dir: str):
-    """分析扩散过程消融实验"""
+    """Analyze the diffusion process ablation."""
     
     print("\n" + "="*80)
-    print("🔬 Diffusion Process Ablation - T_backward Analysis")
+    print("Diffusion Process Ablation - T_backward Analysis")
     print("="*80)
     
-    # 🔥 加载timing数据
+    # Load timing data
     timing_dict = load_timing_data(result_base_dir)
     
-    # 搜索所有t_backward目录
+    # Collect every t_backward experiment directory
     t_backward_dirs = sorted(glob.glob(os.path.join(result_base_dir, "t_backward_*")))
     
     if not t_backward_dirs:
-        print(f"❌ No t_backward directories found in {result_base_dir}")
+        print(f"[ERROR] No t_backward directories found in {result_base_dir}")
         return
     
     results = []
@@ -144,23 +144,23 @@ def analyze_diffusion_ablation(result_base_dir: str):
         try:
             t_backward = int(dir_name.split('_')[-1])
         except:
-            print(f"⚠️  Cannot parse t_backward from {dir_name}")
+            print(f"[WARN] Cannot parse t_backward from {dir_name}")
             continue
         
-        print(f"\n📊 Analyzing: T_backward = {t_backward}")
+        print(f"\nAnalyzing: T_backward = {t_backward}")
         print(f"   Path: {exp_dir}")
         
         data = load_results_from_dir(exp_dir)
         if data is None:
-            print(f"   ❌ Failed to load results")
+            print(f"   [ERROR] Failed to load results")
             continue
         
         metrics = compute_metrics(data['generations'])
         if not metrics:
-            print(f"   ❌ Failed to compute metrics")
+            print(f"   [ERROR] Failed to compute metrics")
             continue
         
-        # 🔥 获取推理时间
+        # Look up the measured inference time
         inference_time = timing_dict.get(t_backward, None)
         
         print(f"   Samples: {metrics['total_samples']}")
@@ -183,14 +183,14 @@ def analyze_diffusion_ablation(result_base_dir: str):
         })
     
     if not results:
-        print("\n❌ No valid results")
+        print("\n[ERROR] No valid results")
         return
     
     results = sorted(results, key=lambda x: x['T_backward'])
     df = pd.DataFrame(results)
     
     print("\n" + "="*80)
-    print("📋 Summary Table")
+    print("Summary Table")
     print("="*80)
     
     display_df = df.copy()
@@ -208,19 +208,19 @@ def analyze_diffusion_ablation(result_base_dir: str):
     print(display_df[['T_backward', 'AUROC', 'AUPR', 'Score_Gap', 'Inference_Time']].to_string(index=False))
     print("="*80)
     
-    # 保存结果
+    # Persist the summary
     csv_file = os.path.join(result_base_dir, "diffusion_ablation_summary.csv")
     df.to_csv(csv_file, index=False)
-    print(f"\n💾 Summary saved to: {csv_file}")
+    print(f"\nSummary saved to: {csv_file}")
     
     json_file = os.path.join(result_base_dir, "diffusion_ablation_summary.json")
     with open(json_file, 'w') as f:
         json.dump(results, f, indent=2)
-    print(f"💾 Detailed results saved to: {json_file}")
+    print(f"Detailed results saved to: {json_file}")
     
-    # 🔥 Notion格式表格
+    # Notion-friendly markdown table
     print("\n" + "="*80)
-    print("📝 Notion Table Format (Copy & Paste)")
+    print("Notion Table Format (Copy & Paste)")
     print("="*80)
     print("\n```")
     print("| T_backward | AUROC (GSM8K) | AUPR | Inference Time (s) |")
@@ -233,13 +233,13 @@ def analyze_diffusion_ablation(result_base_dir: str):
     print("```")
     print("="*80)
     
-    # 找最佳配置
+    # Identify the best configuration
     valid_results = [r for r in results if r['AUROC'] is not None]
     if valid_results:
         best = max(valid_results, key=lambda x: x['AUROC'])
         
         print("\n" + "="*80)
-        print("🏆 Best Configuration")
+        print("Best Configuration")
         print("="*80)
         print(f"T_backward: {best['T_backward']}")
         print(f"AUROC: {best['AUROC']:.4f}")
@@ -264,11 +264,11 @@ def main():
     args = parser.parse_args()
     
     if not os.path.exists(args.result_dir):
-        print(f"❌ Result directory not found: {args.result_dir}")
+        print(f"[ERROR] Result directory not found: {args.result_dir}")
         return
     
     analyze_diffusion_ablation(args.result_dir)
-    print("\n✅ Analysis complete!")
+    print("\n[OK] Analysis complete!")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-消融实验后处理分析 - 基于已有结果
-无需重新运行模型，直接从保存的特征值重新计算不同组合的效果
+Post-hoc ablation analysis on existing results.
+Re-scores feature combinations from the saved per-sample features, so the model does not need to be re-run.
 """
 import argparse
 import json
@@ -15,12 +15,12 @@ from pathlib import Path
 
 
 def load_existing_results(result_dir: str) -> List[Dict]:
-    """加载已有的BMC评估结果"""
+    """Load existing BMC evaluation results."""
     pattern = os.path.join(result_dir, "*_generations.json")
     files = glob.glob(pattern)
     
     if not files:
-        print(f"❌ No result files found in {result_dir}")
+        print(f"[ERROR] No result files found in {result_dir}")
         return []
     
     all_generations = []
@@ -31,10 +31,10 @@ def load_existing_results(result_dir: str) -> List[Dict]:
                 data = json.load(f)
                 all_generations.extend(data['generations'])
         except Exception as e:
-            print(f"⚠️  Error loading {filepath}: {e}")
+            print(f"[WARN] Error loading {filepath}: {e}")
             continue
     
-    print(f"✅ Loaded {len(all_generations)} samples from {len(files)} files")
+    print(f"[OK] Loaded {len(all_generations)} samples from {len(files)} files")
     return all_generations
 
 
@@ -43,8 +43,8 @@ def recompute_consistency_score(
     active_features: List[str]
 ) -> float:
     """
-    根据指定的特征重新计算consistency_score
-    使用等权重平均
+    Recompute consistency_score from the given subset of features,
+    using an equally weighted average.
     """
     if not active_features:
         return 0.0
@@ -54,7 +54,7 @@ def recompute_consistency_score(
         if feature in bmc_scores:
             scores.append(bmc_scores[feature])
         else:
-            print(f"⚠️  Warning: Feature '{feature}' not found in bmc_scores")
+            print(f"[WARN] Feature '{feature}' not found in bmc_scores")
     
     if not scores:
         return 0.0
@@ -67,9 +67,9 @@ def analyze_feature_combination(
     active_features: List[str],
     combo_name: str
 ) -> Dict:
-    """分析特定特征组合的效果"""
+    """Evaluate a specific feature combination."""
     
-    # 重新计算consistency_score
+    # Recompute consistency_score for this combination
     new_scores = []
     labels = []
     
@@ -79,11 +79,11 @@ def analyze_feature_combination(
         
         bmc_scores = gen['bmc_scores']
         
-        # 跳过失败的样本
+        # Skip samples where BMC scoring failed
         if bmc_scores.get('skipped', False):
             continue
         
-        # 重新计算分数
+        # Re-score with only the active features
         new_score = recompute_consistency_score(bmc_scores, active_features)
         new_scores.append(new_score)
         labels.append(1 if gen['is_correct'] else 0)
@@ -95,7 +95,7 @@ def analyze_feature_combination(
             'error': 'No valid samples'
         }
     
-    # 计算指标
+    # Aggregate metrics
     total = len(labels)
     correct = sum(labels)
     accuracy = correct / total if total > 0 else 0.0
@@ -109,14 +109,14 @@ def analyze_feature_combination(
         'accuracy': accuracy,
     }
     
-    # 计算AUC
+    # AUC metrics
     if len(set(labels)) > 1:
         try:
             roc_auc = roc_auc_score(labels, new_scores)
             precision, recall, _ = precision_recall_curve(labels, new_scores)
             pr_auc = auc(recall, precision)
             
-            # 分组统计
+            # Per-class score statistics
             correct_scores = [s for s, l in zip(new_scores, labels) if l == 1]
             wrong_scores = [s for s, l in zip(new_scores, labels) if l == 0]
             
@@ -131,14 +131,14 @@ def analyze_feature_combination(
                             (np.mean(wrong_scores) if wrong_scores else 0.0),
             })
         except Exception as e:
-            print(f"⚠️  Error computing AUC for {combo_name}: {e}")
+            print(f"[WARN] Error computing AUC for {combo_name}: {e}")
             metrics.update({
                 'roc_auc': -1,
                 'pr_auc': -1,
                 'score_gap': 0.0,
             })
     else:
-        print(f"⚠️  Only one class in {combo_name}, cannot compute AUC")
+        print(f"[WARN] Only one class in {combo_name}, cannot compute AUC")
         metrics.update({
             'roc_auc': -1,
             'pr_auc': -1,
@@ -150,30 +150,30 @@ def analyze_feature_combination(
 
 def run_ablation_analysis(result_dir: str, output_dir: str = None):
     """
-    在已有结果上运行消融分析
+    Run the ablation analysis over previously generated results.
     """
     
     print("\n" + "="*80)
-    print("🔬 GSM8K Ablation Study - Post-hoc Analysis")
+    print("GSM8K Ablation Study - Post-hoc Analysis")
     print("="*80)
-    print(f"📂 Loading results from: {result_dir}")
+    print(f"Loading results from: {result_dir}")
     
-    # 1. 加载已有结果
+    # 1. Load existing results
     generations = load_existing_results(result_dir)
     
     if not generations:
-        print("❌ No data to analyze")
+        print("[ERROR] No data to analyze")
         return
     
-    # 检查第一个样本的特征
+    # Inspect the first sample to discover the available features
     sample = generations[0]
     if 'bmc_scores' in sample:
         available_features = [k for k in sample['bmc_scores'].keys() 
                             if k not in ['consistency_score', 'reconstructed_text', 
                                        't_probe_used', 'skipped', 'sequence_accuracy']]
-        print(f"✅ Available features: {', '.join(available_features)}")
+        print(f"[OK] Available features: {', '.join(available_features)}")
     
-    # 2. 定义要测试的特征组合
+    # 2. Feature combinations to evaluate
     feature_combinations = [
         ("Token Only", ["token_accuracy"]),
         ("Semantic Only", ["semantic_similarity"]),
@@ -189,8 +189,8 @@ def run_ablation_analysis(result_dir: str, output_dir: str = None):
         ("All Five (+ Char)", ["token_accuracy", "semantic_similarity", "avg_confidence", "number_retention", "char_similarity"]),
         ("Full BMC (All 6)", ["token_accuracy", "semantic_similarity", "avg_confidence", 
                              "number_retention", "char_similarity", "final_answer_match"]),
-        # ── 新增：针对 reviewer 的消融 ──────────────────────────────────────────
-        # 去掉 task-specific 指标，仅保留 task-agnostic 的 surface 信号
+        # ── Additional ablations requested by reviewers ─────────────────────────
+        # Drop the task-specific metrics and keep only task-agnostic surface signals
         ("w/o FAM (surface+num+char)",
         ["token_accuracy", "semantic_similarity", "avg_confidence",
         "number_retention", "char_similarity"]),
@@ -199,42 +199,42 @@ def run_ablation_analysis(result_dir: str, output_dir: str = None):
         ["token_accuracy", "semantic_similarity", "avg_confidence",
         "char_similarity", "final_answer_match"]),
 
-        # 核心消融：同时去掉两个 task-specific 指标
+        # Core ablation: remove both task-specific metrics at once
         ("w/o FAM + NumRet (task-agnostic only)",
         ["token_accuracy", "semantic_similarity", "avg_confidence",
         "char_similarity"]),
         # ────────────────────────────────────────────────────────────────────────
     ]
     
-    # 3. 分析每个组合
+    # 3. Evaluate each combination
     results = []
     
     for combo_name, features in feature_combinations:
-        print(f"\n📊 Analyzing: {combo_name}")
+        print(f"\nAnalyzing: {combo_name}")
         print(f"   Features: {', '.join(features)}")
         
         metrics = analyze_feature_combination(generations, features, combo_name)
         
         if 'error' not in metrics:
-            print(f"   ✅ ROC-AUC: {metrics['roc_auc']:.4f}" if metrics['roc_auc'] > 0 else "   ⚠️  AUC: N/A")
+            print(f"   ROC-AUC: {metrics['roc_auc']:.4f}" if metrics['roc_auc'] > 0 else "   [WARN] AUC: N/A")
             print(f"   Score Gap: {metrics['score_gap']:.4f}" if metrics.get('score_gap', 0) > 0 else "")
             results.append(metrics)
         else:
-            print(f"   ❌ {metrics['error']}")
+            print(f"   [ERROR] {metrics['error']}")
     
     if not results:
-        print("\n❌ No valid results")
+        print("\n[ERROR] No valid results")
         return
     
-    # 4. 创建汇总表
+    # 4. Build the summary table
     df = pd.DataFrame(results)
     
-    # 格式化显示列
+    # Columns to display
     display_df = df[['combo_name', 'features', 'num_features', 'accuracy', 
                      'roc_auc', 'pr_auc', 'score_gap', 'mean_score_correct', 
                      'mean_score_wrong', 'total_samples']].copy()
     
-    # 格式化数值
+    # Number formatting
     display_df['accuracy'] = display_df['accuracy'].apply(lambda x: f"{x:.2%}")
     for col in ['roc_auc', 'pr_auc', 'score_gap', 'mean_score_correct', 'mean_score_wrong']:
         if col in display_df.columns:
@@ -243,36 +243,36 @@ def run_ablation_analysis(result_dir: str, output_dir: str = None):
             )
     
     print("\n" + "="*80)
-    print("📋 Summary Table")
+    print("Summary Table")
     print("="*80)
     print(display_df.to_string(index=False))
     print("="*80)
     
-    # 5. 保存结果
+    # 5. Save results
     if output_dir is None:
         output_dir = result_dir
     
     os.makedirs(output_dir, exist_ok=True)
     
-    # 保存CSV
+    # Write CSV
     csv_file = os.path.join(output_dir, "ablation_analysis_posthoc.csv")
     df.to_csv(csv_file, index=False)
-    print(f"\n💾 Summary saved to: {csv_file}")
+    print(f"\nSummary saved to: {csv_file}")
     
-    # 保存JSON
+    # Write JSON
     json_file = os.path.join(output_dir, "ablation_analysis_posthoc.json")
     with open(json_file, 'w') as f:
         json.dump(results, f, indent=2)
-    print(f"💾 Detailed results saved to: {json_file}")
+    print(f"Detailed results saved to: {json_file}")
     
-    # 6. 找出最佳配置
+    # 6. Identify the best configuration
     valid_results = [r for r in results if r['roc_auc'] > 0]
     if valid_results:
         best_auc = max(r['roc_auc'] for r in valid_results)
         best_config = [r for r in valid_results if r['roc_auc'] == best_auc][0]
         
         print("\n" + "="*80)
-        print("🏆 Best Configuration")
+        print("Best Configuration")
         print("="*80)
         print(f"Name: {best_config['combo_name']}")
         print(f"Features: {best_config['features']}")
@@ -285,9 +285,9 @@ def run_ablation_analysis(result_dir: str, output_dir: str = None):
         print(f"Mean Score (Wrong): {best_config['mean_score_wrong']:.4f}")
         print("="*80)
         
-        # 7. 生成可视化建议
+        # 7. Suggestions for follow-up visualizations
         print("\n" + "="*80)
-        print("📊 Visualization Suggestions")
+        print("Visualization Suggestions")
         print("="*80)
         print("\n1. Feature Importance (by ROC-AUC when used alone):")
         single_feature_results = [r for r in valid_results if r['num_features'] == 1]
@@ -328,12 +328,12 @@ def main():
     args = parser.parse_args()
     
     if not os.path.exists(args.result_dir):
-        print(f"❌ Result directory not found: {args.result_dir}")
+        print(f"[ERROR] Result directory not found: {args.result_dir}")
         return
     
     run_ablation_analysis(args.result_dir, args.output_dir)
     
-    print("\n✅ Analysis complete!")
+    print("\n[OK] Analysis complete!")
 
 
 if __name__ == "__main__":

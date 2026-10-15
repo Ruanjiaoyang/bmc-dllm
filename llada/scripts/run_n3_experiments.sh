@@ -3,13 +3,13 @@
 cd "$(dirname "$0")/.."
 
 # ============================================================
-# N=3 采样次数对比实验
-# 运行 Self-Consistency, Best-of-N (Confidence), Best-of-N (BMC)
-# 在 GSM8K 和 MATH 数据集上
+# Comparison study at sampling budget N=3
+# Runs Self-Consistency, Best-of-N (Confidence) and Best-of-N (BMC)
+# on the configured datasets.
 # ============================================================
 
 # ============================================================
-# 设置环境变量
+# Environment
 # ============================================================
 export HF_ALLOW_CODE_EVAL=1
 
@@ -17,25 +17,25 @@ export HF_ALLOW_CODE_EVAL=1
 # Configuration
 # ============================================================
 GPU_IDS=(0 1 2 3 4 5 6 7)
-MASTER_PORT=29501  # 使用不同的端口避免冲突
+MASTER_PORT=29501  # Distinct port to avoid clashing with other runs
 
-# 模型路径
+# Model paths
 MODEL_PATH="${MODEL_PATH:-GSAI-ML/LLaDA-8B-Instruct}"
 SEMANTIC_MODEL_PATH="${SEMANTIC_MODEL_PATH:-sentence-transformers/all-MiniLM-L6-v2}"
 
-# 实验配置
+# Experiment configuration
 read -ra DATASETS <<< "${DATASETS:-gsm8k math arc gpqa}"
-NUM_SAMPLES=3  # 🔥 关键：N=3
+NUM_SAMPLES=3  # Key setting for this study: N=3
 BATCH_SIZE=8
 GEN_LENGTH=128
 TEMPERATURE=0.7
 
-# BMC参数
+# BMC parameters
 T_PROBE=0.9
 NUM_REVERSE_STEPS=16
 BMC_NUM_SAMPLES=4
 
-# 输出目录 - 🔥 单独的文件夹
+# Output directory, kept separate from the other studies
 OUTPUT_DIR="results_n3"
 
 # Set GPUs from command line
@@ -50,36 +50,36 @@ GPU_LIST=$(IFS=,; echo "${GPU_IDS[*]}")
 NUM_GPUS=${#GPU_IDS[@]}
 
 echo "========================================================================"
-echo "🔬 N=3 采样次数对比实验"
+echo "Comparison study at sampling budget N=3"
 echo "========================================================================"
 echo "Using GPUs: $GPU_LIST (nproc_per_node=$NUM_GPUS)"
 echo "Model: $MODEL_PATH"
 echo ""
-echo "实验设置："
+echo "Experiment settings:"
 echo "  - Datasets: ${DATASETS[@]}"
-echo "  - Num samples: $NUM_SAMPLES (固定3次采样)"
+echo "  - Num samples: $NUM_SAMPLES (fixed at 3 samples)"
 echo "  - Batch size: $BATCH_SIZE"
 echo "  - Output dir: $OUTPUT_DIR"
 echo ""
-echo "将运行3个方法："
+echo "Methods to run:"
 echo "  1. Self-Consistency (N=3)"
 echo "  2. Best-of-N (Confidence, N=3)"
 echo "  3. Best-of-N (BMC, N=3)"
 echo ""
-echo "预计总时间：~8小时"
+echo "Estimated total runtime: ~8 hours"
 echo "========================================================================"
 
-# 创建输出目录
+# Create the output directory
 mkdir -p $OUTPUT_DIR
 
-# 检查模型
+# Check the models
 if [ ! -d "$MODEL_PATH" ]; then
-  echo "❌ ERROR: Model not found!"
+  echo "[ERROR] Model not found!"
   exit 1
 fi
 
 if [ ! -d "$SEMANTIC_MODEL_PATH" ]; then
-  echo "❌ ERROR: Semantic model not found!"
+  echo "[ERROR] Semantic model not found!"
   exit 1
 fi
 
@@ -92,10 +92,10 @@ run_experiment() {
   
   echo ""
   echo "========================================================================"
-  echo "📊 Running: $method on $dataset (N=$NUM_SAMPLES)"
+  echo "Running: $method on $dataset (N=$NUM_SAMPLES)"
   echo "========================================================================"
   
-  # 构建命令
+  # Dispatch on the selected method
   if [ "$method" = "self_consistency" ]; then
     CUDA_VISIBLE_DEVICES=$GPU_LIST torchrun \
       --nproc_per_node $NUM_GPUS \
@@ -146,9 +146,9 @@ run_experiment() {
   fi
   
   if [ $? -eq 0 ]; then
-    echo "✓ Completed: $method on $dataset"
+    echo "[OK] Completed: $method on $dataset"
   else
-    echo "❌ Failed: $method on $dataset"
+    echo "[ERROR] Failed: $method on $dataset"
     exit 1
   fi
   echo "------------------------------------------------------------------------"
@@ -159,7 +159,7 @@ run_experiment() {
 # ============================================================
 echo ""
 echo "========================================================================"
-echo "🚀 Starting N=3 Experiments"
+echo "Starting N=3 Experiments"
 echo "========================================================================"
 
 METHODS=("self_consistency" "best_of_n_confidence" "best_of_n_bmc")
@@ -170,7 +170,7 @@ total_experiments=$((${#DATASETS[@]} * ${#METHODS[@]}))
 for dataset in "${DATASETS[@]}"; do
   echo ""
   echo "========================================================================"
-  echo "🎯 Dataset: $dataset"
+  echo "Dataset: $dataset"
   echo "========================================================================"
   
   for method in "${METHODS[@]}"; do
@@ -186,18 +186,18 @@ done
 # ============================================================
 echo ""
 echo "========================================================================"
-echo "✅ All N=3 Experiments Completed!"
+echo "[OK] All N=3 Experiments Completed!"
 echo "========================================================================"
 echo ""
 echo "Results saved to: $OUTPUT_DIR/"
 echo ""
-echo "📊 Summary:"
+echo "Summary:"
 echo "  - Total experiments: $experiment_count"
 echo "  - Datasets: ${DATASETS[@]}"
 echo "  - Methods: ${METHODS[@]}"
 echo "  - Num samples: $NUM_SAMPLES"
 echo ""
-echo "📁 Generated files:"
+echo "Generated files:"
 ls -lh $OUTPUT_DIR/*_merged.json 2>/dev/null || echo "  Checking for merged files..."
 echo ""
 echo "Next step:"

@@ -1,5 +1,5 @@
 """
-BMC交叉熵对比实验 - 修正分布式问题 + 优化权重支持
+BMC cross-entropy comparison experiment, with distributed fixes and optimized-weight support.
 """
 import argparse
 import json
@@ -23,7 +23,7 @@ from bmc_core_ce import BMCEstimatorWithCE
 
 
 def init_seed(seed=42):
-    """初始化随机种子"""
+    """Initialize the random seeds."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -33,18 +33,16 @@ def init_seed(seed=42):
 
 def setup_single_gpu():
     """
-    🔥 NEW: 初始化单卡分布式环境
-    即使只用一张卡，也需要初始化以兼容generate.py
+    Initialize a single-GPU distributed environment.
+    Even with one GPU the process group must exist for generate.py to work.
     """
     if not dist.is_initialized():
-        # 设置环境变量（单卡模式）
         os.environ['RANK'] = '0'
         os.environ['LOCAL_RANK'] = '0'
         os.environ['WORLD_SIZE'] = '1'
         os.environ['MASTER_ADDR'] = 'localhost'
         os.environ['MASTER_PORT'] = '12355'
         
-        # 初始化进程组
         dist.init_process_group(
             backend='nccl',
             init_method='env://',
@@ -52,45 +50,45 @@ def setup_single_gpu():
             rank=0
         )
         
-        print("✓ 分布式环境初始化完成（单卡模式）\n")
+        print("[OK] Distributed environment initialized (single-GPU mode)\n")
 
 
 def cleanup_dist():
-    """清理分布式环境"""
+    """Tear down the distributed environment."""
     if dist.is_initialized():
         dist.destroy_process_group()
 
 
 def load_optimized_weights(task_name: str = None, weights_path: str = None, verbose: bool = True):
     """
-    🔥 NEW: 自动加载最佳权重
+    Load the best available weights.
 
-    优先级：
-    1. 如果指定了weights_path，直接加载
-    2. 否则搜索task_name相关的最佳权重
-    3. 都没有则返回None（使用默认aggressive_scoring）
+    Resolution order:
+    1. If weights_path is given, load it directly.
+    2. Otherwise search for the best weights matching task_name.
+    3. If nothing is found, return None (the default aggressive_scoring is used).
 
     Returns:
-        Dict: 权重字典，如果没找到返回None
+        Dict: Weight dictionary, or None if no weights were found
     """
     if weights_path:
-        # 指定了权重文件
+        # An explicit weights file was requested
         if not os.path.exists(weights_path):
             if verbose:
-                print(f"⚠️  指定的权重文件不存在: {weights_path}")
+                print(f"[WARN] Specified weights file does not exist: {weights_path}")
             return None
 
         try:
             with open(weights_path, 'r') as f:
                 data = json.load(f)
 
-            # 支持两种格式
+            # Two file layouts are supported
             if 'weights' in data:
                 weights = data['weights']
                 method = data.get('method', 'unknown')
                 metrics = data.get('metrics', {})
             elif 'optimized_results' in data:
-                # 找最佳方法
+                # Pick the best-performing method
                 best_result = max(data['optimized_results'],
                                 key=lambda x: x['metrics'].get('roc_auc', 0))
                 weights = best_result['weights']
@@ -98,18 +96,18 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
                 metrics = best_result['metrics']
             else:
                 if verbose:
-                    print(f"⚠️  权重文件格式不正确: {weights_path}")
+                    print(f"[WARN] Unrecognized weights file format: {weights_path}")
                 return None
 
             if verbose:
                 print(f"\n{'='*60}")
-                print(f"✅ 已加载优化权重")
+                print(f"[OK] Loaded optimized weights")
                 print(f"{'='*60}")
-                print(f"文件: {weights_path}")
-                print(f"方法: {method}")
+                print(f"File: {weights_path}")
+                print(f"Method: {method}")
                 print(f"ROC-AUC: {metrics.get('roc_auc', 0):.4f}")
                 print(f"Score Gap: {metrics.get('score_gap', 0):.4f}")
-                print(f"\n权重配置:")
+                print(f"\nWeight configuration:")
                 for feat, weight in sorted(weights.items(), key=lambda x: -x[1]):
                     print(f"  {feat:25s}: {weight:.4f}")
                 print(f"{'='*60}\n")
@@ -118,18 +116,18 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
 
         except Exception as e:
             if verbose:
-                print(f"⚠️  加载权重文件失败: {e}")
+                print(f"[WARN] Failed to load weights file: {e}")
             return None
 
-    # 自动搜索最佳权重
+    # Automatically search for the best weights
     if task_name:
-        # 搜索优化结果目录
+        # Search the optimization result directories
         patterns = [
             # weights released with this repo (weights/<task>.json), then any newly searched runs
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", f"{task_name}.json"),
             f"bmc_optimization_{task_name}_*/optimization_results.json",
             f"best_weights_{task_name}_*.json",
-            "bmc_optimization_*/optimization_results.json",  # 通用搜索
+            "bmc_optimization_*/optimization_results.json",  # generic fallback search
         ]
 
         best_file = None
@@ -142,13 +140,13 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
                     with open(filepath, 'r') as f:
                         data = json.load(f)
 
-                    # 检查是否匹配任务
+                    # Keep only files that match the requested task
                     file_task = data.get('task', 'unknown')
                     if task_name and file_task != task_name:
                         continue
 
                     if 'optimized_results' in data:
-                        # 找最佳ROC-AUC
+                        # Track the entry with the highest ROC-AUC
                         for result in data['optimized_results']:
                             if 'weights' not in result:
                                 continue
@@ -161,17 +159,17 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
 
         if best_file:
             if verbose:
-                print(f"🔍 自动发现最佳权重: {best_file}")
+                print(f"[INFO] Automatically selected best weights: {best_file}")
             return load_optimized_weights(task_name, best_file, verbose)
 
     if verbose:
-        print(f"ℹ️  未找到优化权重，将使用默认aggressive_scoring策略")
+        print(f"[INFO] No optimized weights found; falling back to the default aggressive_scoring strategy")
 
     return None
 
 
 def get_system_prompt_for_task(task_name):
-    """获取系统提示词"""
+    """Return the system prompt for the given task."""
     GSM_SYSTEM_PROMPT = """You are a math expert. You will be given a question to solve. Solve it step by step. Wrap the final answer in a \\boxed{}.
 Respond in the following format:
 <reasoning>
@@ -192,9 +190,9 @@ def generate_and_save_answers(
     task_config,
     device
 ):
-    """阶段1：生成答案并判断正确性"""
+    """Stage 1: generate answers and check whether they are correct."""
     print(f"\n{'='*80}")
-    print(f"📝 阶段1：生成答案")
+    print(f"Stage 1: generating answers")
     print(f"{'='*80}\n")
     
     model.eval()
@@ -203,8 +201,8 @@ def generate_and_save_answers(
     answer_extractor = task_config["extractor"]
     answer_validator = task_config["validator"]
     
-    for batch in tqdm(dataloader, desc="生成答案"):
-        # 1. 生成
+    for batch in tqdm(dataloader, desc="Generating answers"):
+        # 1. Generation
         input_ids = batch["input_ids"].to(device)
         gt_answers = batch["answers"]
         questions = batch["questions"]
@@ -227,7 +225,7 @@ def generate_and_save_answers(
             out[:, -gen_length:], skip_special_tokens=False
         )
         
-        # 2. 判断正确性
+        # 2. Correctness check
         for j in range(len(gt_answers)):
             generated_answer = answer_extractor(generated_texts[j])
             gt_answer = gt_answers[j]
@@ -246,19 +244,18 @@ def generate_and_save_answers(
             
             all_results.append(result)
     
-    # 统计
     num_correct = sum(1 for r in all_results if r['is_correct'])
     accuracy = num_correct / len(all_results) if all_results else 0
     
-    print(f"\n生成完成!")
-    print(f"  总样本: {len(all_results)}")
-    print(f"  正确: {num_correct}")
-    print(f"  错误: {len(all_results) - num_correct}")
-    print(f"  准确率: {accuracy:.2%}")
+    print(f"\nGeneration complete!")
+    print(f"  Total samples: {len(all_results)}")
+    print(f"  Correct: {num_correct}")
+    print(f"  Incorrect: {len(all_results) - num_correct}")
+    print(f"  Accuracy: {accuracy:.2%}")
     
     if len(set(r['label'] for r in all_results)) < 2:
-        print(f"\n⚠️  警告：只有一个类别！")
-        print(f"     这可能导致无法计算AUC！")
+        print(f"\n[WARN] Only one class is present!")
+        print(f"       AUC cannot be computed in this case.")
     
     return all_results
 
@@ -277,21 +274,21 @@ def evaluate_with_bmc_mode(
     optimized_weights,
     device
 ):
-    """阶段2：对已生成的答案用指定BMC模式评估"""
+    """Stage 2: score the already generated answers with the given BMC mode."""
     print(f"\n{'='*80}")
-    print(f"🔍 阶段2：BMC评估 - {scoring_mode.upper()}")
+    print(f"Stage 2: BMC evaluation - {scoring_mode.upper()}")
     print(f"{'='*80}\n")
     
-    # 🔥 根据scoring_mode决定是否使用optimized_weights
+    # Optimized weights only apply to the six-metric part of the score
     use_weights = None
     if scoring_mode == 'six_only' and optimized_weights:
         use_weights = optimized_weights
-        print(f"✅ Six Only模式 - 使用优化权重")
+        print(f"[OK] Six Only mode - using optimized weights")
     elif scoring_mode == 'ce_plus_six' and optimized_weights:
         use_weights = optimized_weights
-        print(f"✅ CE+Six模式 - 使用优化权重（仅用于六指标部分）")
+        print(f"[OK] CE+Six mode - using optimized weights (six-metric part only)")
     else:
-        print(f"ℹ️  {scoring_mode.upper()}模式 - 使用默认aggressive_scoring")
+        print(f"[INFO] {scoring_mode.upper()} mode - using the default aggressive_scoring")
     
     bmc_probe = BMCEstimatorWithCE(
         model=model,
@@ -300,8 +297,8 @@ def evaluate_with_bmc_mode(
         semantic_model_path=semantic_model_path,
         adaptive_t=False,
         num_samples=1,
-        aggressive_scoring=(use_weights is None),  # 🔥 有权重时不用aggressive
-        optimized_weights=use_weights,  # 🔥 传入权重
+        aggressive_scoring=(use_weights is None),  # aggressive scoring is only a fallback
+        optimized_weights=use_weights,
         task_name=task_name,
         task_config=task_config,
         system_prompt=system_prompt,
@@ -311,7 +308,7 @@ def evaluate_with_bmc_mode(
     
     results_with_bmc = []
     
-    for result in tqdm(generated_results, desc=f"BMC评估({scoring_mode})"):
+    for result in tqdm(generated_results, desc=f"BMC evaluation ({scoring_mode})"):
         question = result['question']
         generated_text = result['generated_text']
         
@@ -332,7 +329,7 @@ def evaluate_with_bmc_mode(
             results_with_bmc.append(result_with_bmc)
             
         except Exception as e:
-            print(f"\n⚠️  BMC评估失败: {e}")
+            print(f"\n[WARN] BMC evaluation failed: {e}")
             
             result_with_bmc = {
                 **result,
@@ -346,7 +343,7 @@ def evaluate_with_bmc_mode(
 
 
 def compute_metrics(results):
-    """计算评估指标"""
+    """Compute evaluation metrics."""
     if not results:
         return {'error': 'No results'}
     
@@ -363,7 +360,7 @@ def compute_metrics(results):
         
         unique_labels = set(labels)
         if len(unique_labels) < 2:
-            print(f"⚠️  只有一个类别: {unique_labels}")
+            print(f"[WARN] Only one class is present: {unique_labels}")
             return {
                 'num_samples': len(labels),
                 'num_correct': sum(labels),
@@ -395,7 +392,7 @@ def compute_metrics(results):
         return metrics
         
     except Exception as e:
-        print(f"计算指标时出错: {e}")
+        print(f"Error while computing metrics: {e}")
         return {'error': str(e)}
 
 
@@ -415,22 +412,20 @@ def main():
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--seed", type=int, default=42)
     
-    # 🔥 NEW: 优化权重支持
+    # Optimized weights
     parser.add_argument("--optimized_weights_path", type=str, default=None,
-                       help="优化权重文件路径（可选，自动搜索）")
+                       help="Path to an optimized weights file (optional; searched automatically)")
     parser.add_argument("--force_aggressive", action="store_true",
-                       help="强制使用aggressive_scoring，忽略优化权重")
+                       help="Force aggressive_scoring and ignore optimized weights")
     
     args = parser.parse_args()
     
-    # 🔥 初始化分布式环境（必须！）
+    # The process group must be initialized even in single-GPU mode
     setup_single_gpu()
     
-    # 初始化随机种子
     init_seed(args.seed)
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # 设置设备
     if args.device.startswith("cuda"):
         device_id = int(args.device.split(":")[-1]) if ":" in args.device else 0
         torch.cuda.set_device(device_id)
@@ -439,15 +434,14 @@ def main():
         device = args.device
     
     print("="*100)
-    print("🚀 BMC交叉熵对比实验 + 优化权重支持")
+    print("BMC cross-entropy comparison experiment with optimized-weight support")
     print("="*100)
-    print(f"模型: {args.model_path}")
-    print(f"样本数: {args.num_samples}")
-    print(f"批大小: {args.batch_size}")
-    print(f"设备: {device}")
+    print(f"Model: {args.model_path}")
+    print(f"Samples: {args.num_samples}")
+    print(f"Batch size: {args.batch_size}")
+    print(f"Device: {device}")
     print("="*100 + "\n")
     
-    # 🔥 NEW: 加载优化权重
     optimized_weights = None
     if not args.force_aggressive:
         optimized_weights = load_optimized_weights(
@@ -456,8 +450,7 @@ def main():
             verbose=True
         )
     
-    # 加载模型
-    print("📥 加载模型...")
+    print("Loading model...")
     model = AutoModel.from_pretrained(
         args.model_path,
         trust_remote_code=True,
@@ -469,10 +462,9 @@ def main():
         args.model_path,
         trust_remote_code=True
     )
-    print("✓ 模型加载完成\n")
+    print("[OK] Model loaded\n")
     
-    # 加载数据集
-    print(f"📥 加载GSM8K数据集...")
+    print(f"Loading the GSM8K dataset...")
     dataset = create_dataset(
         "gsm8k",
         tokenizer=tokenizer,
@@ -487,14 +479,13 @@ def main():
         shuffle=False,
         collate_fn=dataset.collate_fn
     )
-    print(f"✓ 加载了 {len(dataset)} 个样本\n")
+    print(f"[OK] Loaded {len(dataset)} samples\n")
     
-    # 获取任务配置
     task_config = get_task_config("gsm8k")
     system_prompt = get_system_prompt_for_task("gsm8k")
     
     # ============================================================
-    # 阶段1：生成答案
+    # Stage 1: generate answers
     # ============================================================
     try:
         start_time = time.time()
@@ -509,9 +500,8 @@ def main():
         )
         generation_time = time.time() - start_time
         
-        print(f"\n生成阶段用时: {generation_time:.2f}s")
+        print(f"\nGeneration stage took: {generation_time:.2f}s")
         
-        # 保存生成结果
         gen_output_file = os.path.join(args.output_dir, "generated_answers.json")
         with open(gen_output_file, 'w') as f:
             json.dump({
@@ -519,17 +509,17 @@ def main():
                 'results': generated_results,
                 'generation_time': generation_time
             }, f, indent=2)
-        print(f"✓ 生成结果已保存: {gen_output_file}\n")
+        print(f"[OK] Generation results saved: {gen_output_file}\n")
         
     except Exception as e:
-        print(f"\n❌ 生成阶段失败: {e}")
+        print(f"\n[ERROR] Generation stage failed: {e}")
         import traceback
         traceback.print_exc()
         cleanup_dist()
         return
     
     # ============================================================
-    # 阶段2：用三种BMC模式评估
+    # Stage 2: evaluate with the three BMC scoring modes
     # ============================================================
     all_results = {}
     all_metrics = {}
@@ -550,7 +540,7 @@ def main():
                 system_prompt=system_prompt,
                 t_probe=args.t_probe,
                 num_reverse_steps=args.num_reverse_steps,
-                optimized_weights=optimized_weights,  # 🔥 传入权重
+                optimized_weights=optimized_weights,
                 device=device
             )
             
@@ -561,34 +551,33 @@ def main():
             all_results[mode] = results_with_bmc
             all_metrics[mode] = metrics
             
-            # 打印结果
             if 'error' not in metrics:
                 print(f"\n{'='*80}")
-                print(f"📊 {mode.upper()} 结果:")
+                print(f"{mode.upper()} results:")
                 if metrics.get('using_optimized_weights'):
-                    print(f"   ✅ 使用优化权重")
+                    print(f"   [OK] Using optimized weights")
                 print(f"{'='*80}")
-                print(f"样本数: {metrics['num_samples']}")
-                print(f"正确: {metrics['num_correct']}")
-                print(f"错误: {metrics['num_wrong']}")
-                print(f"准确率: {metrics['accuracy']:.2%}")
+                print(f"Samples: {metrics['num_samples']}")
+                print(f"Correct: {metrics['num_correct']}")
+                print(f"Incorrect: {metrics['num_wrong']}")
+                print(f"Accuracy: {metrics['accuracy']:.2%}")
                 print(f"ROC-AUC: {metrics['roc_auc']:.4f}")
                 print(f"PR-AUC: {metrics['pr_auc']:.4f}")
-                print(f"分数差距: {metrics['score_gap']:.4f}")
-                print(f"正确样本均分: {metrics['mean_score_correct']:.4f}")
-                print(f"错误样本均分: {metrics['mean_score_wrong']:.4f}")
-                print(f"用时: {metrics['evaluation_time']:.2f}s")
+                print(f"Score gap: {metrics['score_gap']:.4f}")
+                print(f"Mean score (correct): {metrics['mean_score_correct']:.4f}")
+                print(f"Mean score (incorrect): {metrics['mean_score_wrong']:.4f}")
+                print(f"Elapsed: {metrics['evaluation_time']:.2f}s")
                 print(f"{'='*80}\n")
             else:
-                print(f"\n⚠️  {mode.upper()} 失败: {metrics['error']}\n")
+                print(f"\n[WARN] {mode.upper()} failed: {metrics['error']}\n")
                 
         except Exception as e:
-            print(f"\n❌ {mode.upper()} 评估失败: {e}")
+            print(f"\n[ERROR] {mode.upper()} evaluation failed: {e}")
             import traceback
             traceback.print_exc()
             all_metrics[mode] = {'error': str(e)}
     
-    # 保存完整结果
+    # Save the full results
     output_file = os.path.join(args.output_dir, "comparison_results.json")
     with open(output_file, 'w') as f:
         json.dump({
@@ -600,24 +589,22 @@ def main():
             'detailed_results': all_results
         }, f, indent=2)
     
-    print(f"✅ 完整结果已保存: {output_file}\n")
+    print(f"[OK] Full results saved: {output_file}\n")
     
-    # 打印对比
     print("="*100)
-    print("📊 三种模式对比")
+    print("Comparison of the three scoring modes")
     print("="*100)
-    print(f"{'模式':<20} {'权重':<12} {'ROC-AUC':<12} {'Score Gap':<12} {'准确率':<12}")
+    print(f"{'Mode':<20} {'Weights':<12} {'ROC-AUC':<12} {'Score Gap':<12} {'Accuracy':<12}")
     print("-"*100)
     
     for mode in scoring_modes:
         if mode in all_metrics and 'error' not in all_metrics[mode]:
             m = all_metrics[mode]
-            weights_status = "优化权重" if m.get('using_optimized_weights') else "默认"
+            weights_status = "optimized" if m.get('using_optimized_weights') else "default"
             print(f"{mode:<20} {weights_status:<12} {m['roc_auc']:<12.4f} {m['score_gap']:<12.4f} {m['accuracy']:<12.2%}")
     
     print("="*100)
     
-    # 清理分布式环境
     cleanup_dist()
 
 

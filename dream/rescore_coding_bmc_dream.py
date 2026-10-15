@@ -1,21 +1,21 @@
 """
-BMC Coding V2 分数重计算脚本
+BMC Coding V2 rescoring script
 
-从已有的 BMC 评估结果中，使用 V2 评分公式重新计算分数。
-无需重新运行昂贵的 BMC 评估。
+Recomputes scores from existing BMC evaluation results using the V2 scoring
+formula, avoiding a costly re-run of the full BMC evaluation.
 
-V2 评分公式:
+V2 scoring formula:
   score = quality_dim * consistency_dim
 
   quality_dim:
-    - 首选: orig_exec_score (原始代码执行得分)
-    - 备选: char_similarity (字符相似度)
+    - preferred: orig_exec_score (execution score of the original code)
+    - fallback: char_similarity
 
   consistency_dim:
     - 1 - divergence_penalty
     - divergence_penalty = 0.25*(1-char_sim) + 0.25*(1-struct_match) + 0.25*(1-sem_sim) + 0.25*recon_failure
 
-用法:
+Usage:
   python rescore_coding_bmc_dream.py \
     --result_dir results_coding_bmc_dream \
     --datasets humaneval mbpp \
@@ -32,11 +32,11 @@ warnings.filterwarnings('ignore')
 
 
 def load_results(result_dir, dataset, mode):
-    """加载实验结果"""
+    """Load experiment results."""
     pattern = f"{result_dir}/{dataset}_{mode}_rank*.json"
     files = sorted(glob.glob(pattern))
     if not files:
-        print(f"⚠️  No results found for {dataset}_{mode} in {result_dir}")
+        print(f"[WARN] No results found for {dataset}_{mode} in {result_dir}")
         return None, None
 
     all_results = []
@@ -49,7 +49,7 @@ def load_results(result_dir, dataset, mode):
 
 def compute_divergence_penalty(bmc_details):
     """
-    计算重构偏离惩罚（兼容新旧格式）
+    Compute the reconstruction divergence penalty (handles old and new formats).
 
     divergence_penalty = 0.25*(1-char_sim) + 0.25*(1-struct_match)
                           + 0.25*(1-sem_sim) + 0.25*recon_failure
@@ -70,18 +70,18 @@ def compute_divergence_penalty(bmc_details):
 
 def compute_orig_exec_score(result):
     """
-    获取原始代码执行得分（兼容新旧格式）
+    Get the execution score of the original code (handles old and new formats).
 
-    新格式: bmc_details.orig_exec_score
-    旧格式: exec_details.pass@1 或 exec_details.test_passed
+    New format: bmc_details.orig_exec_score
+    Old format: exec_details.pass@1 or exec_details.test_passed
     """
-    # 新格式
+    # New format
     details = result.get("bmc_details", {})
     new_score = details.get("orig_exec_score", -1.0)
     if new_score >= 0:
         return new_score
 
-    # 旧格式: 从顶层 exec_details
+    # Old format: read from the top-level exec_details
     exec_details = result.get("exec_details", {})
     pass_at_1 = exec_details.get("pass@1", None)
     if pass_at_1 is not None:
@@ -90,7 +90,7 @@ def compute_orig_exec_score(result):
 
 
 def compute_orig_exec_pass_rate(result):
-    """获取原始代码是否通过测试（二值）"""
+    """Get whether the original code passed its tests (binary)."""
     details = result.get("bmc_details", {})
     new_rate = details.get("orig_exec_pass_rate", -1.0)
     if new_rate >= 0:
@@ -102,31 +102,31 @@ def compute_orig_exec_pass_rate(result):
 
 def compute_v2_score(result):
     """
-    计算 V2 BMC 分数（基于消融实验优化版）
+    Compute the V2 BMC score (variant tuned on the ablation study).
 
-    消融实验最优公式（直接来自消融结果）:
-      exec_available 时: orig_exec_pass * char_sim * struct_match = 1.0000
-      exec_unavailable 时: char_sim * struct_match ≈ 0.9221
+    Best formula from the ablation study (taken directly from its results):
+      exec available:   orig_exec_pass * char_sim * struct_match = 1.0000
+      exec unavailable: char_sim * struct_match ~ 0.9221
 
-    关键设计：
-      - exec 可用且通过 → 1.0 × char × struct = 完美分离
-      - exec 可用但不通过 → 0.0 × char × struct = 极低分
-      - exec 不可用 → 0.5 × char × struct = 保底分数
+    Key design points:
+      - exec available and passing -> 1.0 * char * struct = perfect separation
+      - exec available but failing -> 0.0 * char * struct = very low score
+      - exec unavailable           -> 0.5 * char * struct = fallback score
     """
     bmc_details = result.get("bmc_details", {})
 
-    # 获取基础指标
+    # Basic metrics
     char_sim = bmc_details.get("char_similarity", 0.0)
     ast_recon = bmc_details.get("ast_validity_recon", 1.0)
     ast_orig = bmc_details.get("ast_validity_orig", 1.0)
     struct_match = bmc_details.get("structural_match", 0.0)
 
-    # 获取 exec 分数
+    # Execution scores
     orig_pass = compute_orig_exec_pass_rate(result)
     orig_exec = compute_orig_exec_score(result)
 
-    # 消融最优公式
-    exec_factor = max(orig_pass, 0.5)  # 通过=1.0，未通过=0.0，无exec=0.5
+    # Best formula from the ablation study
+    exec_factor = max(orig_pass, 0.5)  # pass=1.0, fail=0.0, no exec=0.5
 
     if ast_orig == 1.0 and ast_recon == 1.0:
         v2_score = exec_factor * char_sim * struct_match
@@ -142,9 +142,9 @@ def compute_v2_score(result):
 
 def compute_v2_score_simple(result):
     """
-    计算简化版 V2 分数（仅使用旧格式可用的指标）
-    消融最优公式: char_sim * struct_match（无 exec 时）
-    当 exec 可用时: orig_exec * char_sim * struct_match
+    Compute the simplified V2 score (using only metrics available in old results).
+    Best ablation formula: char_sim * struct_match (when exec is unavailable).
+    When exec is available: orig_exec * char_sim * struct_match
     """
     bmc_details = result.get("bmc_details", {})
     char_sim = bmc_details.get("char_similarity", 0.0)
@@ -171,8 +171,8 @@ def compute_v2_score_simple(result):
 
 def compute_v2_score_simple_v2(result):
     """
-    计算简化版 V2 分数 v2（仅使用旧格式可用的指标）
-    消融最优公式: orig_exec_pass * char_sim * struct_match
+    Compute simplified V2 score v2 (using only metrics available in old results).
+    Best ablation formula: orig_exec_pass * char_sim * struct_match
     """
     bmc_details = result.get("bmc_details", {})
     char_sim = bmc_details.get("char_similarity", 0.0)
@@ -182,12 +182,12 @@ def compute_v2_score_simple_v2(result):
 
 
 def rescore_dataset(result_dir, dataset, mode, output_dir):
-    """对单个数据集进行重评分"""
+    """Rescore a single dataset."""
     results, files = load_results(result_dir, dataset, mode)
     if results is None:
         return {}
 
-    # 计算各方法的分数
+    # Compute the scores for every method
     is_correct = np.array([r.get("is_correct", 0) for r in results], dtype=int)
 
     # V1 BMC Score
@@ -208,7 +208,7 @@ def rescore_dataset(result_dir, dataset, mode, output_dir):
     orig_exec_scores = np.array([compute_orig_exec_score(r) for r in results], dtype=float)
     orig_pass_scores = np.array([compute_orig_exec_pass_rate(r) for r in results], dtype=float)
 
-    # 组合指标
+    # Combined metrics
     combo1 = char_sim_scores * struct_scores * np.maximum(orig_exec_scores, 0.5)
     combo2 = orig_pass_scores * char_sim_scores
 
@@ -321,17 +321,17 @@ def rescore_dataset(result_dir, dataset, mode, output_dir):
         data["results"] = new_results
         with open(dataset_out, 'w') as fp:
             json.dump(data, fp, indent=2, ensure_ascii=False)
-        print(f"  ✓ Updated: {dataset_out}")
+        print(f"  [OK] Updated: {dataset_out}")
 
     return metrics
 
 
 def print_comparison(metrics_dict, dataset):
-    """打印方法对比表格"""
+    """Print a comparison table of the scoring methods."""
     print(f"\n{'='*80}")
-    print(f"🔄 V1 vs V2 BMC 分数对比 ({dataset.upper()})")
+    print(f"V1 vs V2 BMC score comparison ({dataset.upper()})")
     print(f"{'='*80}")
-    print(f"\n{'方法':<30} {'ROC-AUC':>10} {'PR-AUC':>10} {'Δ vs V1':>10}")
+    print(f"\n{'Method':<30} {'ROC-AUC':>10} {'PR-AUC':>10} {'Delta vs V1':>10}")
     print("-" * 65)
 
     v1_roc = None
@@ -355,29 +355,29 @@ def print_comparison(metrics_dict, dataset):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="BMC V2 分数重计算")
+    parser = argparse.ArgumentParser(description="BMC V2 rescoring")
     parser.add_argument("--result_dir", type=str, default="results_coding_bmc_dream",
-                      help="原始结果目录")
+                      help="Directory containing the original results")
     parser.add_argument("--datasets", type=str, nargs='+',
                       default=["humaneval", "mbpp"],
-                      help="数据集列表")
+                      help="List of datasets")
     parser.add_argument("--modes", type=str, nargs='+',
                       default=["direct_code"],
-                      help="生成模式列表")
+                      help="List of generation modes")
     parser.add_argument("--output_dir", type=str, default=None,
-                      help="输出目录（默认追加 _v2）")
+                      help="Output directory (defaults to result_dir with a _v2 suffix)")
     args = parser.parse_args()
 
     if args.output_dir is None:
         args.output_dir = args.result_dir.rstrip('/') + "_v2"
 
     print("="*80)
-    print("🔄 BMC Coding V2 分数重计算")
+    print("BMC Coding V2 rescoring")
     print("="*80)
-    print(f"  输入目录: {args.result_dir}")
-    print(f"  输出目录: {args.output_dir}")
-    print(f"  数据集: {args.datasets}")
-    print(f"  模式: {args.modes}")
+    print(f"  Input directory: {args.result_dir}")
+    print(f"  Output directory: {args.output_dir}")
+    print(f"  Datasets: {args.datasets}")
+    print(f"  Modes: {args.modes}")
     print("="*80)
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -389,7 +389,7 @@ def main():
                 print_comparison(metrics, dataset)
 
     print("="*80)
-    print(f"✅ V2 分数已保存到: {args.output_dir}")
+    print(f"[OK] V2 scores saved to: {args.output_dir}")
     print("="*80)
 
 

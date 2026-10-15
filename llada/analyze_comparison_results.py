@@ -1,9 +1,9 @@
 """
-分析对比实验结果（增强版）
-- 生成准确率对比表格
-- 计算样本效率和时间效率
-- 可视化结果
-- 成本效益分析（基于真实时间）
+Analyze comparison experiment results (enhanced).
+- Build accuracy comparison tables
+- Compute sample efficiency and time efficiency
+- Visualize the results
+- Cost-benefit analysis based on measured wall-clock time
 """
 import json
 import os
@@ -13,7 +13,7 @@ import numpy as np
 
 
 def load_results(results_dir: str = "results_comparison") -> Dict:
-    """加载所有聚合结果"""
+    """Load all aggregated results."""
     results = {}
 
     tasks = ["gsm8k", "math", "olympic", "gpqa", "logiqa", "arc"]
@@ -47,15 +47,15 @@ def load_results(results_dir: str = "results_comparison") -> Dict:
                             "processed": data.get("processed", 0),
                         }
                 except Exception as e:
-                    print(f"⚠️  Error loading {file_path}: {e}")
+                    print(f"[WARN] Error loading {file_path}: {e}")
             else:
-                print(f"⚠️  File not found: {file_path}")
+                print(f"[WARN] File not found: {file_path}")
 
     return results
 
 
 def format_method_name(method: str) -> str:
-    """格式化方法名称"""
+    """Format a method name for display."""
     name_map = {
         "greedy": "Greedy",
         "self_consistency_N3": "Self-Consistency (N=3)",
@@ -70,10 +70,10 @@ def format_method_name(method: str) -> str:
 
 
 def generate_comparison_table(results: Dict):
-    """生成准确率和效率对比表格（包含时间效率）"""
+    """Generate the accuracy and efficiency comparison table (including timing)."""
 
     print("\n" + "=" * 160)
-    print("📊 ACCURACY & EFFICIENCY COMPARISON (WITH TIME ANALYSIS)")
+    print("ACCURACY & EFFICIENCY COMPARISON (WITH TIME ANALYSIS)")
     print("=" * 160 + "\n")
 
     methods = [
@@ -89,7 +89,7 @@ def generate_comparison_table(results: Dict):
 
     tasks = ["gsm8k", "math", "olympic", "gpqa", "logiqa", "arc"]
 
-    # 表头
+    # Table header
     header = f"{'Method':<35}"
     for task in tasks:
         header += f" | {task.upper():^40}"
@@ -102,7 +102,7 @@ def generate_comparison_table(results: Dict):
     print(subheader)
     print("-" * 160)
 
-    # 每个方法的结果
+    # Results for each method
     for method in methods:
         row = f"{format_method_name(method):<35}"
 
@@ -114,17 +114,17 @@ def generate_comparison_table(results: Dict):
                 time_per_sample = metrics.get('avg_time_per_sample', 0.0)
                 has_timing = metrics.get('has_timing', False)
 
-                # 计算两种效率
+                # Compute both efficiency measures
                 if method != "greedy" and "greedy" in results[task]:
                     baseline_acc = results[task]["greedy"]["accuracy"] * 100
                     baseline_samples = results[task]["greedy"].get("avg_samples", 1.0)
                     delta_acc = acc - baseline_acc
 
-                    # 样本效率 = (准确率提升) / (采样数增量)
+                    # Sample efficiency = (accuracy gain) / (extra samples)
                     delta_samples = samples - baseline_samples
                     eff_samples = delta_acc / delta_samples if delta_samples > 0 else 0.0
 
-                    # 🔥 时间效率
+                    # Time efficiency
                     if has_timing and time_per_sample > 0:
                         eff_time = delta_acc / time_per_sample
                     else:
@@ -133,7 +133,7 @@ def generate_comparison_table(results: Dict):
                     eff_samples = 0.0
                     eff_time = 0.0
 
-                # 格式化输出
+                # Format the output
                 time_str = f"{time_per_sample:7.4f}" if has_timing else "    N/A"
                 eff_t_str = f"{eff_time:8.4f}" if has_timing and eff_time != 0.0 else "     N/A"
                 eff_s_str = f"{eff_samples:8.4f}" if eff_samples != 0.0 else "       -"
@@ -155,10 +155,10 @@ def generate_comparison_table(results: Dict):
 
 
 def generate_time_efficiency_analysis(results: Dict):
-    """🔥 新增：时间效率深度分析"""
+    """In-depth time efficiency analysis."""
 
     print("\n" + "=" * 100)
-    print("⏱️  TIME EFFICIENCY ANALYSIS")
+    print("TIME EFFICIENCY ANALYSIS")
     print("=" * 100 + "\n")
 
     tasks = ["gsm8k", "math", "olympic", "gpqa", "logiqa", "arc"]
@@ -172,13 +172,13 @@ def generate_time_efficiency_analysis(results: Dict):
         print(f"{'=' * 80}\n")
 
         if "greedy" not in results[task]:
-            print("⚠️  Baseline (Greedy) not found")
+            print("[WARN] Baseline (Greedy) not found")
             continue
 
         baseline_acc = results[task]["greedy"]["accuracy"] * 100
         print(f"Baseline (Greedy): {baseline_acc:.4f}%\n")
 
-        # 收集有时间记录的方法
+        # Collect the methods that have timing records
         methods_with_time = []
 
         for method in results[task]:
@@ -196,7 +196,7 @@ def generate_time_efficiency_analysis(results: Dict):
             delta_acc = acc - baseline_acc
             eff_time = delta_acc / time_per_sample if time_per_sample > 0 else 0.0
             
-            # 采样效率 = (准确率提升) / (采样数增量)
+            # Sample efficiency = (accuracy gain) / (extra samples)
             baseline_samples = results[task]["greedy"].get("avg_samples", 1.0)
             delta_samples = samples - baseline_samples
             eff_samples = delta_acc / delta_samples if delta_samples > 0 else 0.0
@@ -212,10 +212,10 @@ def generate_time_efficiency_analysis(results: Dict):
             })
 
         if not methods_with_time:
-            print("⚠️  No methods with timing information")
+            print("[WARN] No methods with timing information")
             continue
 
-        # 按时间效率排序
+        # Sort by time efficiency
         methods_sorted = sorted(methods_with_time, key=lambda x: x['eff_time'], reverse=True)
 
         print(f"{'Method':<35} {'Acc':>7} {'Δ Acc':>8} {'Time(s)':>9} {'Samples':>9} {'Eff(pts/s)':>12}")
@@ -228,16 +228,16 @@ def generate_time_efficiency_analysis(results: Dict):
 
         print()
 
-        # 找到最佳方法
+        # Identify the best methods
         best_acc = max(methods_with_time, key=lambda x: x['acc'])
         best_eff = max(methods_with_time, key=lambda x: x['eff_time'])
 
-        print(f"🏆 Best Accuracy: {format_method_name(best_acc['method'])}")
+        print(f"Best Accuracy: {format_method_name(best_acc['method'])}")
         print(f"   Accuracy: {best_acc['acc']:.4f}% (+{best_acc['delta_acc']:.4f}%)")
         print(f"   Time: {best_acc['time']:.4f}s")
         print()
 
-        print(f"⚡ Best Time Efficiency: {format_method_name(best_eff['method'])}")
+        print(f"Best Time Efficiency: {format_method_name(best_eff['method'])}")
         print(f"   Efficiency: {best_eff['eff_time']:.4f} pts/sec")
         print(f"   Accuracy: {best_eff['acc']:.4f}% (+{best_eff['delta_acc']:.4f}%)")
         print(f"   Time: {best_eff['time']:.4f}s")
@@ -245,10 +245,10 @@ def generate_time_efficiency_analysis(results: Dict):
 
 
 def generate_cost_benefit_with_time(results: Dict):
-    """🔥 增强：基于真实时间的成本效益分析"""
+    """Cost-benefit analysis based on measured wall-clock time."""
 
     print("\n" + "=" * 100)
-    print("💰 COST-BENEFIT ANALYSIS (REAL TIME)")
+    print("COST-BENEFIT ANALYSIS (REAL TIME)")
     print("=" * 100 + "\n")
     print("Question: Is the accuracy improvement worth the extra time cost?")
     print()
@@ -264,7 +264,7 @@ def generate_cost_benefit_with_time(results: Dict):
 
         baseline_acc = results[task]["greedy"]["accuracy"] * 100
 
-        # 对比 Self-Consistency N=3 vs N=10
+        # Compare Self-Consistency N=3 vs N=10
         if "self_consistency_N3" in results[task] and "self_consistency_N10" in results[task]:
             sc3 = results[task]["self_consistency_N3"]
             sc10 = results[task]["self_consistency_N10"]
@@ -285,14 +285,14 @@ def generate_cost_benefit_with_time(results: Dict):
                 print(f"  Marginal time efficiency: {marginal_eff:.4f} pts/sec")
 
                 if marginal_eff < 0.1:
-                    print(f"  ❌ Marginal efficiency very low - N=10 may not be worth it!")
+                    print(f"  [ERROR] Marginal efficiency very low - N=10 may not be worth it!")
                 elif marginal_eff < 0.5:
-                    print(f"  ⚠️  Marginal efficiency low - consider N=3 for faster results")
+                    print(f"  [WARN] Marginal efficiency low - consider N=3 for faster results")
                 else:
-                    print(f"  ✅ Reasonable marginal efficiency")
+                    print(f"  [OK] Reasonable marginal efficiency")
                 print()
 
-        # 对比 Best-of-N BMC vs BMC-Guided
+        # Compare Best-of-N BMC vs BMC-Guided
         if "best_of_n_bmc_N10" in results[task] and "bmc_guided" in results[task]:
             bon = results[task]["best_of_n_bmc_N10"]
             guided = results[task]["bmc_guided"]
@@ -318,19 +318,19 @@ def generate_cost_benefit_with_time(results: Dict):
                 print(f"  Accuracy difference: {acc_diff:+.4f}%")
 
                 if abs(acc_diff) < 1.0 and time_savings > 0:
-                    print(f"  ✅ BMC-Guided achieves similar accuracy with less time!")
+                    print(f"  [OK] BMC-Guided achieves similar accuracy with less time!")
                 elif time_savings > 0:
-                    print(f"  ⚠️  BMC-Guided is faster but accuracy differs by {abs(acc_diff):.4f}%")
+                    print(f"  [WARN] BMC-Guided is faster but accuracy differs by {abs(acc_diff):.4f}%")
                 else:
-                    print(f"  ❌ BMC-Guided took more time")
+                    print(f"  [ERROR] BMC-Guided took more time")
                 print()
 
 
 def generate_efficiency_analysis(results: Dict):
-    """原有的效率分析（增强版，包含时间）"""
+    """Sample-efficiency analysis, extended with timing information."""
 
     print("\n" + "=" * 100)
-    print("⚡ EFFICIENCY ANALYSIS")
+    print("EFFICIENCY ANALYSIS")
     print("=" * 100 + "\n")
 
     tasks = ["gsm8k", "math", "olympic", "gpqa", "logiqa", "arc"]
@@ -344,7 +344,7 @@ def generate_efficiency_analysis(results: Dict):
         print(f"{'=' * 80}\n")
 
         if "greedy" not in results[task]:
-            print("⚠️  Baseline (Greedy) not found")
+            print("[WARN] Baseline (Greedy) not found")
             continue
 
         baseline_acc = results[task]["greedy"]["accuracy"] * 100
@@ -364,7 +364,7 @@ def generate_efficiency_analysis(results: Dict):
 
             delta_acc = acc - baseline_acc
 
-            # 样本效率 = (准确率提升) / (采样数增量)
+            # Sample efficiency = (accuracy gain) / (extra samples)
             baseline_samples = results[task]["greedy"].get("avg_samples", 1.0)
             delta_samples = samples - baseline_samples
             eff_samples = delta_acc / delta_samples if delta_samples > 0 else 0.0
@@ -385,7 +385,7 @@ def generate_efficiency_analysis(results: Dict):
                 'has_timing': has_timing,
             })
 
-        # 按样本效率排序
+        # Sort by sample efficiency
         methods_data_sorted = sorted(methods_data, key=lambda x: x['eff_samples'], reverse=True)
 
         print(f"{'Method':<35} {'Acc':>7} {'Δ Acc':>8} {'Samp':>7} {'Time(s)':>9} {'Eff_S':>9} {'Eff_T':>10}")
@@ -403,10 +403,10 @@ def generate_efficiency_analysis(results: Dict):
 
 
 def generate_method_comparison(results: Dict):
-    """生成不同N值的方法对比"""
+    """Compare methods across different values of N."""
 
     print("\n" + "=" * 100)
-    print("🔍 EFFECT OF N (NUMBER OF SAMPLES)")
+    print("EFFECT OF N (NUMBER OF SAMPLES)")
     print("=" * 100 + "\n")
 
     tasks = ["gsm8k", "math", "olympic", "gpqa", "logiqa", "arc"]
@@ -440,7 +440,7 @@ def generate_method_comparison(results: Dict):
                 has_timing = metrics.get('has_timing', False)
                 delta_acc = acc - baseline_acc
                 
-                # 采样效率 = (准确率提升) / (采样数增量)
+                # Sample efficiency = (accuracy gain) / (extra samples)
                 baseline_samples = results[task].get("greedy", {}).get("avg_samples", 1.0)
                 delta_samples = samples - baseline_samples
                 eff_samples = delta_acc / delta_samples if delta_samples > 0 else 0.0
@@ -458,7 +458,7 @@ def generate_method_comparison(results: Dict):
 
             print()
 
-        # BMC-Guided特殊分析
+        # BMC-Guided specific analysis
         if "bmc_guided" in results[task]:
             metrics = results[task]["bmc_guided"]
             acc = metrics.get('accuracy', 0.0) * 100
@@ -467,7 +467,7 @@ def generate_method_comparison(results: Dict):
             has_timing = metrics.get('has_timing', False)
             delta_acc = acc - baseline_acc
             
-            # 采样效率 = (准确率提升) / (采样数增量)
+            # Sample efficiency = (accuracy gain) / (extra samples)
             baseline_samples = results[task].get("greedy", {}).get("avg_samples", 1.0)
             delta_samples = samples - baseline_samples
             eff_samples = delta_acc / delta_samples if delta_samples > 0 else 0.0
@@ -495,10 +495,10 @@ def generate_method_comparison(results: Dict):
 
 
 def generate_summary_statistics(results: Dict):
-    """生成摘要统计"""
+    """Generate summary statistics."""
 
     print("\n" + "=" * 100)
-    print("📈 SUMMARY STATISTICS")
+    print("SUMMARY STATISTICS")
     print("=" * 100 + "\n")
 
     tasks = ["gsm8k", "math", "olympic", "gpqa", "logiqa", "arc"]
@@ -525,7 +525,7 @@ def generate_summary_statistics(results: Dict):
 
             delta_acc = acc - baseline_acc
             
-            # 采样效率 = (准确率提升) / (采样数增量)
+            # Sample efficiency = (accuracy gain) / (extra samples)
             baseline_samples = results[task]["greedy"].get("avg_samples", 1.0)
             delta_samples = samples - baseline_samples
             eff_samples = delta_acc / delta_samples if delta_samples > 0 else 0.0
@@ -562,7 +562,7 @@ def generate_summary_statistics(results: Dict):
 
 
 def save_latex_table(results: Dict, output_file: str = "comparison_table.tex"):
-    """保存LaTeX格式表格（包含时间信息）"""
+    """Save the results as a LaTeX table (including timing)."""
 
     methods = [
         "greedy",
@@ -602,7 +602,7 @@ def save_latex_table(results: Dict, output_file: str = "comparison_table.tex"):
                 time_per_sample = metrics.get('avg_time_per_sample', 0.0)
                 has_timing = metrics.get('has_timing', False)
 
-                # 计算时间效率
+                # Compute time efficiency
                 if method != "greedy" and "greedy" in results[task]:
                     baseline_acc = results[task]["greedy"]["accuracy"] * 100
                     delta_acc = acc - baseline_acc
@@ -642,7 +642,7 @@ def save_latex_table(results: Dict, output_file: str = "comparison_table.tex"):
     with open(output_file, 'w') as f:
         f.write(latex_content)
 
-    print(f"\n✅ LaTeX table saved to: {output_file}\n")
+    print(f"\n[OK] LaTeX table saved to: {output_file}\n")
 
 
 if __name__ == "__main__":
@@ -653,26 +653,26 @@ if __name__ == "__main__":
     parser.add_argument("--save_latex", action="store_true")
     args = parser.parse_args()
 
-    # 加载结果
-    print("\n🔍 Loading results...")
+    # Load results
+    print("\nLoading results...")
     results = load_results(args.results_dir)
 
     if not results:
-        print("❌ No results found!")
+        print("[ERROR] No results found!")
         exit(1)
 
-    # 生成各种分析
+    # Run the analyses
     generate_comparison_table(results)
-    generate_time_efficiency_analysis(results)  # 🔥 新增
+    generate_time_efficiency_analysis(results)
     generate_efficiency_analysis(results)
     generate_method_comparison(results)
-    generate_cost_benefit_with_time(results)  # 🔥 增强
+    generate_cost_benefit_with_time(results)
     generate_summary_statistics(results)
     
-    # 保存LaTeX表格
+    # Save the LaTeX table
     if args.save_latex:
         save_latex_table(results)
     
     print("\n" + "=" * 100)
-    print("✅ Analysis Complete!")
+    print("Analysis complete!")
     print("=" * 100 + "\n")

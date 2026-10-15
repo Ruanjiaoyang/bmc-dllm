@@ -943,14 +943,14 @@ def aggregate_results(directory="."):
                     detailed_results,
                     total_effective_tokens,
                 ) = parse_gpqa_answers(json_path=json_file)
-            elif "logiqa" in setup_name:  # 新增
+            elif "logiqa" in setup_name:
                 (
                     correct,
                     processed,
                     detailed_results,
                     total_effective_tokens,
                 ) = parse_logiqa_answers(json_path=json_file)
-            elif "arc" in setup_name:  # 新增
+            elif "arc" in setup_name:
                 (
                     correct,
                     processed,

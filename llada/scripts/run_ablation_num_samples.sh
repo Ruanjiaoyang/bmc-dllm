@@ -3,8 +3,8 @@
 cd "$(dirname "$0")/.."
 
 # ============================================================
-# 🔬 Ensemble Size Ablation - NUM_SAMPLES
-# 测试不同采样次数的影响
+# Ensemble Size Ablation - NUM_SAMPLES
+# Measures the effect of different ensemble sizes.
 # N ∈ {1, 2, 3, 5, 10}
 # ============================================================
 
@@ -18,22 +18,22 @@ SEMANTIC_MODEL_PATH="${SEMANTIC_MODEL_PATH:-sentence-transformers/all-MiniLM-L6-
 GEN_LENGTH=128
 BATCH_SIZE=8
 T_PROBE=0.9
-NUM_REVERSE_STEPS=16  # 使用最佳T_backward=16
+NUM_REVERSE_STEPS=16  # Best T_backward found in the ablation
 
-# 🔥 优化权重路径（根据实际情况修改）
+# Path to the optimized scoring weights (adjust to your setup)
 OPTIMIZED_WEIGHTS_PATH="weights/gsm8k.json"
 
 OUTPUT_BASE="ablation_num_samples_$(date +%Y%m%d_%H%M%S)"
 
-# 计算GPU数量
+# Derive the GPU count from the device list
 IFS=',' read -ra GPU_ARRAY <<< "$GPU_IDS"
 NUM_GPUS=${#GPU_ARRAY[@]}
 
-# 环境变量
+# Environment
 export HF_ALLOW_CODE_EVAL=1
 
 echo "========================================================================"
-echo "🔬 Ensemble Size Ablation - NUM_SAMPLES"
+echo "Ensemble Size Ablation - NUM_SAMPLES"
 echo "========================================================================"
 echo "Task:           $TASK"
 echo "GPUs:           $GPU_IDS (${NUM_GPUS} GPUs)"
@@ -43,27 +43,27 @@ echo "Weights:        $OPTIMIZED_WEIGHTS_PATH"
 echo "Output Base:    $OUTPUT_BASE"
 echo "========================================================================"
 
-# 检查权重文件
+# Validate the weights file
 if [ ! -z "$OPTIMIZED_WEIGHTS_PATH" ]; then
     if [[ "$OPTIMIZED_WEIGHTS_PATH" == *"*"* ]]; then
         WEIGHTS_FILE=$(ls $OPTIMIZED_WEIGHTS_PATH 2>/dev/null | head -n 1)
         if [ ! -z "$WEIGHTS_FILE" ]; then
             OPTIMIZED_WEIGHTS_PATH="$WEIGHTS_FILE"
-            echo "✅ Found weights: $OPTIMIZED_WEIGHTS_PATH"
+            echo "[OK] Found weights: $OPTIMIZED_WEIGHTS_PATH"
         else
-            echo "⚠️  Warning: No weights file found"
+            echo "[WARN] No weights file found"
             OPTIMIZED_WEIGHTS_PATH=""
         fi
     elif [ ! -f "$OPTIMIZED_WEIGHTS_PATH" ]; then
-        echo "⚠️  Warning: Weights file not found"
+        echo "[WARN] Weights file not found"
         OPTIMIZED_WEIGHTS_PATH=""
     else
-        echo "✅ Using weights: $OPTIMIZED_WEIGHTS_PATH"
+        echo "[OK] Using weights: $OPTIMIZED_WEIGHTS_PATH"
     fi
 fi
 
 # ============================================================
-# 运行函数
+# Experiment runner
 # ============================================================
 run_experiment() {
     local num_samples=$1
@@ -71,13 +71,13 @@ run_experiment() {
     
     echo ""
     echo "========================================================================"
-    echo "🚀 Running: NUM_SAMPLES = $num_samples"
+    echo "Running: NUM_SAMPLES = $num_samples"
     echo "Output: $output_dir"
     echo "========================================================================"
     
     local start_time=$(date +%s)
     
-    # 构建命令
+    # Build the command
     local CMD="CUDA_VISIBLE_DEVICES=$GPU_IDS torchrun \
         --nproc_per_node $NUM_GPUS \
         --master_port $MASTER_PORT \
@@ -93,58 +93,58 @@ run_experiment() {
         --num_samples $num_samples \
         --aggressive_scoring"
     
-    # 添加优化权重
+    # Append the optimized weights
     if [ ! -z "$OPTIMIZED_WEIGHTS_PATH" ]; then
         CMD="$CMD --optimized_weights_path \"$OPTIMIZED_WEIGHTS_PATH\""
     fi
     
     CMD="$CMD --suffix \"num_samples_${num_samples}\""
     
-    # 执行命令
+    # Run the command
     eval $CMD
     
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
     
     if [ $? -eq 0 ]; then
-        echo "✅ NUM_SAMPLES=$num_samples completed (${duration}s)"
-        echo "⏱️  Inference time: ${duration}s"
+        echo "[OK] NUM_SAMPLES=$num_samples completed (${duration}s)"
+        echo "Inference time: ${duration}s"
         echo "$num_samples,$duration" >> "${OUTPUT_BASE}/timing_results.csv"
     else
-        echo "❌ NUM_SAMPLES=$num_samples failed"
+        echo "[ERROR] NUM_SAMPLES=$num_samples failed"
         return 1
     fi
 }
 
-# 初始化timing文件
+# Initialize the timing file
 echo "num_samples,inference_time_seconds" > "${OUTPUT_BASE}/timing_results.csv"
 
 # ============================================================
-# 实验1: N = 1 (baseline)
+# Experiment 1: N = 1 (baseline)
 # ============================================================
 run_experiment 1
 
 # ============================================================
-# 实验2: N = 2
+# Experiment 2: N = 2
 # ============================================================
 run_experiment 2
 
 # ============================================================
-# 实验3: N = 4
+# Experiment 3: N = 4
 # ============================================================
 run_experiment 4
 
 # ============================================================
-# 实验4: N = 8
+# Experiment 4: N = 8
 # ============================================================
 run_experiment 8
 
 # ============================================================
-# 总结
+# Summary
 # ============================================================
 echo ""
 echo "========================================================================"
-echo "✅ All experiments completed!"
+echo "[OK] All experiments completed!"
 echo "========================================================================"
 echo "Results saved to: $OUTPUT_BASE"
 echo ""

@@ -1,21 +1,21 @@
 """
-BMC核心模块：精确适配Dream模型（V3增强版）
-本版本修复：
-1. ✅ 动态负熵归一化
-2. ✅ 添加deterministic模式
-3. ✅ 增强错误处理和日志
-4. ✅ 与Dream模型的精确对齐
-5. ✅ Chat Template支持（新增）
-6. ✅ 通用答案提取器（新增，支持GPQA/ARC选择题）
-7. ✅ 任务特定配置（新增）
+BMC core module, specialized for the Dream model.
+Capabilities:
+1. Dynamic negative-entropy normalization
+2. Deterministic mode
+3. Robust error handling and logging
+4. Exact alignment with the Dream model
+5. Chat template support
+6. Universal answer extractor (handles GPQA/ARC multiple-choice items)
+7. Task-specific configuration
 
-主要改进：
-- 使用Dream的sample_tokens逻辑
-- 精确复现Dream的timestep调度
-- 添加批量处理支持
-- 完善的负熵统计和归一化
-- 支持Chat Template格式化输入
-- 支持多种任务类型（数学题、选择题、代码题）
+Design notes:
+- Reuses Dream's sample_tokens logic
+- Reproduces Dream's timestep schedule exactly
+- Supports batched processing
+- Provides negative-entropy statistics and normalization
+- Accepts chat-template formatted input
+- Handles several task families (math, multiple-choice, code)
 """
 import torch
 import torch.nn.functional as F
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 class BMCEstimatorDream:
-    """BMC 估计器 - Dream模型精确适配版（部分修复v2）"""
+    """BMC estimator, specialized for the Dream model."""
 
     def __init__(
         self,
@@ -48,29 +48,29 @@ class BMCEstimatorDream:
         adaptive_normalization: bool = True,
         use_dream_sampling: bool = True,
         optimized_weights: Optional[Dict[str, float]] = None,
-        task_name: Optional[str] = None,  # 🔥 NEW: 任务名称
-        task_config: Optional[Dict] = None,  # 🔥 NEW: 任务特定配置
-        system_prompt: Optional[str] = None,  # 🔥 NEW: System prompt
-        use_chat_template: bool = True,  # 🔥 NEW: 是否使用chat template
+        task_name: Optional[str] = None,  # Task name
+        task_config: Optional[Dict] = None,  # Task-specific configuration
+        system_prompt: Optional[str] = None,  # System prompt
+        use_chat_template: bool = True,  # Whether to use a chat template
     ) -> None:
         """
         Args:
             model: Dream AutoModel
             tokenizer: Tokenizer
-            device: 运行设备
-            semantic_model_path: 本地语义编码器路径
-            adaptive_t: 是否使用自适应t_probe
-            num_samples: 重复采样次数（>=1）
-            aggressive_scoring: 使用更激进的评分策略（如果没有优化权重）
-            diffusion_steps: Dream模型的扩散步数
-            eps: Dream的timestep epsilon参数
-            adaptive_normalization: 是否动态调整负熵归一化范围
-            use_dream_sampling: 是否使用Dream的sample_tokens逻辑
-            optimized_weights: 优化后的权重字典（优先级最高）
-            task_name: 任务名称（如 'gsm8k', 'gpqa', 'arc' 等）
-            task_config: 任务配置字典，包含 'extractor' 和 'validator'
-            system_prompt: System prompt文本（用于chat template）
-            use_chat_template: 是否使用chat template（默认True）
+            device: Device to run on
+            semantic_model_path: Local path to the semantic encoder
+            adaptive_t: Whether to adapt t_probe to the input
+            num_samples: Number of repeated samples (>=1)
+            aggressive_scoring: Use the aggressive scoring strategy (when no optimized weights)
+            diffusion_steps: Number of diffusion steps of the Dream model
+            eps: Dream's timestep epsilon parameter
+            adaptive_normalization: Whether to adjust the negative-entropy range dynamically
+            use_dream_sampling: Whether to use Dream's sample_tokens logic
+            optimized_weights: Dictionary of tuned weights (takes precedence)
+            task_name: Task name (e.g. 'gsm8k', 'gpqa', 'arc')
+            task_config: Task configuration dict holding 'extractor' and 'validator'
+            system_prompt: System prompt text (used by the chat template)
+            use_chat_template: Whether to use a chat template (default True)
         """
         self.model = model
         self.tokenizer = tokenizer
@@ -83,69 +83,69 @@ class BMCEstimatorDream:
         self.adaptive_normalization = adaptive_normalization
         self.use_dream_sampling = use_dream_sampling
 
-        # 🔥 优化权重支持
+        # Optimized-weight support
         self.optimized_weights = optimized_weights
         self.use_optimized_weights = optimized_weights is not None
         
-        # 🔥 NEW: 任务特定配置
+        # Task-specific configuration
         self.task_name = task_name.lower() if task_name else None
         self.task_config = task_config
         
-        # 🔥 NEW: Chat Template支持
+        # Chat template support
         self.system_prompt = system_prompt
         self.use_chat_template = use_chat_template
         
-        # 判断任务类型
+        # Determine the task family
         self.is_choice_task = self.task_name in ['gpqa', 'mmlu', 'arc', 'hellaswag']
         self.is_math_task = self.task_name in ['gsm8k', 'math', 'aime', 'olympiad']
         self.is_code_task = self.task_name in ['humaneval', 'mbpp']
         self.needs_postprocessing = self.task_name in ['countdown', 'humaneval', 'mbpp', 'sudoku']
 
-        # 固定mask token ID
+        # Fixed mask token ID
         self.mask_token_id = tokenizer.mask_token_id if hasattr(tokenizer, 'mask_token_id') else 126336
         self.model.eval()
 
-        # 简化：移除复杂的负熵统计逻辑
-        # 直接使用max概率作为置信度，与Llada对齐
+        # Simplified: the elaborate negative-entropy statistics were removed.
+        # The max probability is used directly as the confidence, matching LLaDA.
 
-        logger.info(f"✓ BMC探针初始化成功")
-        logger.info(f"  配置: diffusion_steps={diffusion_steps}, eps={eps}")
-        logger.info(f"  adaptive_normalization={adaptive_normalization} (已简化)")
+        logger.info(f"[OK] BMC probe initialized")
+        logger.info(f"  Config: diffusion_steps={diffusion_steps}, eps={eps}")
+        logger.info(f"  adaptive_normalization={adaptive_normalization} (simplified)")
         logger.info(f"  use_dream_sampling={use_dream_sampling}")
-        logger.info(f"  使用max概率作为置信度（与Llada对齐)")
+        logger.info(f"  Using the max probability as confidence (aligned with LLaDA)")
         
-        # 🔥 打印格式配置
-        logger.info(f"✅ Chat Template: {'启用' if self.use_chat_template else '禁用'}")
+        # Report the input-formatting configuration
+        logger.info(f"[OK] Chat Template: {'enabled' if self.use_chat_template else 'disabled'}")
         if self.use_chat_template and self.system_prompt:
-            logger.info(f"   System Prompt (前50字): {self.system_prompt[:50]}...")
+            logger.info(f"   System Prompt (first 50 chars): {self.system_prompt[:50]}...")
         elif self.use_chat_template and not self.system_prompt:
-            logger.info(f"   ⚠️  Chat Template启用但未提供System Prompt")
+            logger.info(f"   [WARN] Chat template enabled but no system prompt was provided")
         
-        # 打印评分策略
+        # Report the scoring strategy
         if self.use_optimized_weights:
-            logger.info("✅ 使用优化权重评分")
-            logger.info("权重配置:")
+            logger.info("[OK] Scoring with optimized weights")
+            logger.info("Weight configuration:")
             for feat, weight in sorted(self.optimized_weights.items(), key=lambda x: -x[1]):
                 logger.info(f"  {feat:25s}: {weight:.4f}")
         elif self.aggressive_scoring:
-            logger.info("使用激进评分策略（aggressive_scoring）")
+            logger.info("Using the aggressive scoring strategy (aggressive_scoring)")
         else:
-            logger.info("使用默认评分策略")
+            logger.info("Using the default scoring strategy")
         
-        # 🔥 打印任务配置
+        # Report the task configuration
         if self.task_name:
-            logger.info(f"✅ 任务类型: {self.task_name}")
+            logger.info(f"[OK] Task type: {self.task_name}")
             if self.is_choice_task:
-                logger.info("   → 选择题任务（使用宽松答案提取）")
+                logger.info("   -> Multiple-choice task (lenient answer extraction)")
             elif self.is_math_task:
-                logger.info("   → 数学任务（使用数值答案提取）")
+                logger.info("   -> Math task (numeric answer extraction)")
             elif self.is_code_task:
-                logger.info("   → 代码任务（使用代码提取）")
+                logger.info("   -> Code task (code extraction)")
             
             if self.task_config:
-                logger.info("   → 使用任务特定的提取器和验证器")
+                logger.info("   -> Using the task-specific extractor and validator")
 
-        # 加载语义编码器
+        # Load the semantic encoder
         try:
             import sys, types
             stub = types.ModuleType('apex.amp')
@@ -156,16 +156,16 @@ class BMCEstimatorDream:
             from sentence_transformers import SentenceTransformer
             if semantic_model_path:
                 self.semantic_encoder = SentenceTransformer(semantic_model_path)
-                logger.info(f"✓ 语义编码器加载成功 (本地路径)")
+                logger.info(f"[OK] Semantic encoder loaded (local path)")
             else:
                 self.semantic_encoder = SentenceTransformer('all-MiniLM-L6-v2')
-                logger.info("✓ 语义编码器加载成功 (HuggingFace)")
+                logger.info("[OK] Semantic encoder loaded (HuggingFace)")
         except Exception as e:
-            logger.error(f"❌ 语义编码器加载失败: {e}")
+            logger.error(f"[ERROR] Failed to load the semantic encoder: {e}")
             self.semantic_encoder = None
 
     def compute_adaptive_t(self, question: str, base_t: float = 0.9) -> float:
-        """根据问题复杂度自适应调整t_probe"""
+        """Adapt t_probe to the complexity of the question."""
         if not self.adaptive_t:
             return base_t
 
@@ -197,10 +197,10 @@ class BMCEstimatorDream:
         answer_start_idx: int
     ) -> torch.Tensor:
         """
-        前向加噪（保留原逻辑）
+        Forward noising.
 
-        注意：此版本保留原有的<answer>标签定位逻辑
-        后续会根据实际模型输出格式进行优化
+        Note: this version keeps the original <answer> tag localization logic,
+        which may be refined later to match the actual model output format.
         """
         masked_ids = input_ids.clone()
         batch_size, seq_len = input_ids.shape
@@ -212,22 +212,22 @@ class BMCEstimatorDream:
         if generated_len <= 0:
             return masked_ids
 
-        # 逐样本处理
+        # Process one sample at a time
         for b in range(batch_size):
             generated_ids = input_ids[b, answer_start_idx:]
             generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=False)
 
-            # 查找 <answer> 标签的起始位置
+            # Locate the start of the <answer> tag
             answer_tag_start = generated_text.find('<answer>')
 
             if answer_tag_start == -1:
-                # 如果没有找到<answer>标签，按原逻辑处理整个生成部分
+                # Without an <answer> tag, noise the whole generated span
                 mask_probs = torch.rand(generated_len, device=self.device)
                 mask = mask_probs < t
                 masked_ids[b, answer_start_idx:][mask] = self.mask_token_id
                 continue
 
-            # 找到<answer>标签在token序列中的位置
+            # Find where the <answer> tag falls in the token sequence
             cumulative_text = ""
             answer_token_start_idx = -1
 
@@ -241,21 +241,21 @@ class BMCEstimatorDream:
                     break
 
             if answer_token_start_idx == -1:
-                # 定位失败，使用原逻辑
+                # Localization failed; fall back to noising the whole span
                 mask_probs = torch.rand(generated_len, device=self.device)
                 mask = mask_probs < t
                 masked_ids[b, answer_start_idx:][mask] = self.mask_token_id
                 continue
 
-            # 分段处理：
-            # 1. <reasoning> 部分：按 t 比例 mask
+            # Handle the two spans separately:
+            # 1. <reasoning> span: mask a fraction t of the tokens
             reasoning_len = answer_token_start_idx
             if reasoning_len > 0:
                 mask_probs = torch.rand(reasoning_len, device=self.device)
                 mask = mask_probs < t
                 masked_ids[b, answer_start_idx:answer_start_idx + reasoning_len][mask] = self.mask_token_id
 
-            # 2. <answer> 部分：完全 mask
+            # 2. <answer> span: mask it completely
             answer_len = generated_len - answer_token_start_idx
             if answer_len > 0:
                 masked_ids[b, answer_start_idx + answer_token_start_idx:] = self.mask_token_id
@@ -271,46 +271,46 @@ class BMCEstimatorDream:
         deterministic: bool = True
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        使用Dream的采样逻辑（完全对齐版）
+        Sample tokens using Dream's sampling logic.
 
-        主要改进：
-        1. 完全对齐Dream的sample_tokens函数
-        2. 使用max概率作为confidence（而非负熵）
-        3. 使用torch.distributions.Categorical采样
+        Design notes:
+        1. Mirrors Dream's sample_tokens function exactly
+        2. Uses the max probability as confidence (instead of negative entropy)
+        3. Samples with torch.distributions.Categorical
 
         Returns:
-            confidence: 采样token的概率（越接近1越确定）
-            sampled_tokens: 采样的token
+            confidence: Probability of the sampled token (closer to 1 is more certain)
+            sampled_tokens: The sampled tokens
         """
         original_dtype = logits.dtype
         logits = logits.to(torch.float32)
 
-        # 温度缩放
+        # Temperature scaling
         if temperature > 0:
             logits = logits / temperature
 
-        # Top-p过滤
+        # Top-p filtering
         if top_p is not None and top_p < 1:
             logits = self._top_p_logits(logits, top_p)
 
-        # Top-k过滤
+        # Top-k filtering
         if top_k is not None:
             logits = self._top_k_logits(logits, top_k)
 
-        # 计算概率
+        # Convert to probabilities
         probs = torch.softmax(logits, dim=-1)
 
-        # ===== 完全对齐Dream的sample_tokens =====
+        # ===== Mirrors Dream's sample_tokens =====
         if deterministic or temperature == 0.0:
-            # 确定性：使用argmax
+            # Deterministic: take the argmax
             confidence, sampled_tokens = probs.max(dim=-1)
         else:
-            # 随机采样：使用Categorical（与Dream一致）
+            # Stochastic: Categorical sampling (same as Dream)
             try:
                 sampled_tokens = torch.distributions.Categorical(probs=probs).sample()
                 confidence = torch.gather(probs, -1, sampled_tokens.unsqueeze(-1)).squeeze(-1)
             except:
-                # fallback到argmax
+                # Fall back to argmax
                 confidence, sampled_tokens = probs.max(dim=-1)
 
         return confidence.to(original_dtype), sampled_tokens
@@ -345,51 +345,51 @@ class BMCEstimatorDream:
         temperature: float = 0.1,
         alg_temp: float = 0.0,
         track_confidence: bool = True,
-        deterministic: bool = True  # 新增：确定性模式
+        deterministic: bool = True  # Deterministic mode
     ) -> Tuple[torch.Tensor, float]:
         """
-        反向去噪：精确复现Dream的unmask策略（修复版）
+        Reverse denoising that reproduces Dream's unmasking strategy.
 
-        主要改进：
-        1. ✅ 添加deterministic模式
-        2. ✅ 使用Dream的sample_tokens逻辑
-        3. ✅ 改进的置信度追踪和统计
-        4. ✅ 更好的错误处理
+        Design notes:
+        1. Supports a deterministic mode
+        2. Uses Dream's sample_tokens logic
+        3. Tracks confidence statistics
+        4. Handles errors defensively
 
         Returns:
-            reconstructed_ids: 重构的token序列
-            avg_confidence: 平均负熵值
+            reconstructed_ids: Reconstructed token sequence
+            avg_confidence: Mean negative-entropy value
         """
         current_ids = masked_ids.clone()
         q_len = question_ids.size(1)
         confidences = []
 
-        # ===== Dream的timestep调度（与generation_mixin.py完全一致）=====
+        # ===== Dream's timestep schedule (identical to generation_mixin.py) =====
         timesteps = torch.linspace(1, self.eps, num_steps + 1, device=self.device)
 
         try:
             with torch.no_grad():
                 for step in range(num_steps):
-                    # 获取logits - 修复：添加tok_idx参数
-                    # Dream模型需要3个参数：(input_ids, attention_mask, tok_idx)
+                    # Fetch logits; the Dream model takes three arguments:
+                    # (input_ids, attention_mask, tok_idx)
                     logits = self.model(current_ids, 'full', None).logits
 
-                    # ⚠️ Dream的logits shift操作（必须保留）
+                    # [WARN] Dream's logits shift; this must be kept
                     logits = torch.cat([logits[:, :1], logits[:, :-1]], dim=1)
 
-                    # 找到masked位置
+                    # Locate the masked positions
                     mask_positions = (current_ids == self.mask_token_id)
 
                     if not mask_positions.any():
-                        logger.debug(f"Step {step}: 没有mask位置，提前退出")
+                        logger.debug(f"Step {step}: no masked positions left, stopping early")
                         break
 
-                    # 计算概率
+                    # Convert to probabilities
                     probs = F.softmax(logits, dim=-1)
 
-                    # ===== 使用Dream的采样逻辑（简化版）=====
+                    # ===== Dream's sampling logic (simplified) =====
                     if self.use_dream_sampling:
-                        # 只对masked位置采样
+                        # Sample only at masked positions
                         mask_logits = logits[mask_positions]
                         confidence_masked, predicted_tokens_masked = self._sample_tokens_dream(
                             mask_logits,
@@ -397,14 +397,14 @@ class BMCEstimatorDream:
                             deterministic=deterministic
                         )
 
-                        # 重构完整的predicted_tokens和confidence
+                        # Rebuild the full predicted_tokens and confidence tensors
                         predicted_tokens = current_ids.clone()
                         predicted_tokens[mask_positions] = predicted_tokens_masked
                         
-                        # 使用max概率作为confidence（与Llada一致）
+                        # Use the max probability as confidence (same as LLaDA)
                         confidence_full = probs.max(dim=-1).values
                     else:
-                        # 简化逻辑：直接使用argmax和max概率
+                        # Simplified path: argmax plus its max probability
                         if deterministic or temperature == 0.0:
                             confidence_full, predicted_tokens = probs.max(dim=-1)
                         else:
@@ -415,30 +415,30 @@ class BMCEstimatorDream:
                             ).view(logits.shape[:-1])
                             confidence_full = torch.gather(probs, -1, predicted_tokens.unsqueeze(-1)).squeeze(-1)
 
-                    # ===== Dream的timestep调度 =====
+                    # ===== Dream's timestep schedule =====
                     t = timesteps[step]
                     s = timesteps[step + 1] if step < num_steps - 1 else self.eps
                     unmask_ratio = (1 - s / t).item()
 
-                    # 记录答案部分的平均置信度（max概率）
+                    # Record the mean confidence (max probability) over the answer span
                     if track_confidence:
                         answer_confidence = confidence_full[:, q_len:][mask_positions[:, q_len:]]
                         if len(answer_confidence) > 0:
                             avg_conf = answer_confidence.mean().item()
                             confidences.append(avg_conf)
 
-                    # ===== Dream的unmask策略 =====
+                    # ===== Dream's unmasking strategy =====
                     for b in range(current_ids.size(0)):
                         masked_indices = torch.where(mask_positions[b])[0]
                         if len(masked_indices) == 0:
                             continue
 
-                        # 只处理答案部分
+                        # Only operate on the answer span
                         answer_masked = masked_indices[masked_indices >= q_len]
                         if len(answer_masked) == 0:
                             continue
 
-                        # Dream的unmask数量计算
+                        # Dream's rule for how many tokens to unmask
                         num_to_unmask = int(len(answer_masked) * unmask_ratio)
                         if step == num_steps - 1:
                             num_to_unmask = len(answer_masked)
@@ -446,17 +446,17 @@ class BMCEstimatorDream:
                         if num_to_unmask == 0:
                             continue
 
-                        # 使用置信度（max概率）选择token
+                        # Select tokens by confidence (max probability)
                         confidence_b = confidence_full[b, answer_masked]
                         k = min(num_to_unmask, len(confidence_b))
 
                         if k > 0:
                             if alg_temp == 0.0:
-                                # topk选择（选择最高置信度）
+                                # Top-k selection (highest confidence first)
                                 top_k_result = torch.topk(confidence_b, k)
                                 unmask_positions = answer_masked[top_k_result.indices]
                             else:
-                                # 温度采样
+                                # Temperature sampling
                                 probs_sample = F.softmax(confidence_b / alg_temp, dim=-1)
                                 sample_indices = torch.multinomial(probs_sample, k, replacement=False)
                                 unmask_positions = answer_masked[sample_indices]
@@ -464,16 +464,16 @@ class BMCEstimatorDream:
                             current_ids[b, unmask_positions] = predicted_tokens[b, unmask_positions]
 
         except Exception as e:
-            logger.error(f"反向扩散过程出错: {e}", exc_info=True)
-            # 返回原始的masked_ids和默认confidence
+            logger.error(f"Error during reverse diffusion: {e}", exc_info=True)
+            # Return the original masked_ids and a sentinel confidence
             return masked_ids, -1.0
 
-        # 计算平均置信度（max概率）
+        # Average confidence (max probability)
         avg_confidence = np.mean(confidences) if confidences else 0.0
         return current_ids, avg_confidence
 
-    # 简化：移除复杂的负熵统计和归一化逻辑
-    # 直接使用max概率，已经在[0,1]范围内
+    # Simplified: the negative-entropy statistics and normalization were removed.
+    # The max probability is used directly and is already within [0, 1].
 
     def probe(
         self,
@@ -484,7 +484,7 @@ class BMCEstimatorDream:
         alg_temp: float = 0.0,
         return_details: bool = False
     ) -> Dict[str, float]:
-        """完整的BMC探测流程（修复版）"""
+        """Run the full BMC probing pipeline."""
 
         if self.num_samples > 1:
             all_scores = []
@@ -494,15 +494,15 @@ class BMCEstimatorDream:
                 )
                 all_scores.append(scores)
 
-            # 平均所有分数（与LLaDA保持一致）
+            # Average across samples (consistent with LLaDA)
             avg_scores = {}
             for key in all_scores[0].keys():
                 if isinstance(all_scores[0][key], (int, float)):
                     avg_scores[key] = np.mean([s[key] for s in all_scores])
                 else:
-                    avg_scores[key] = all_scores[0][key]  # 非数值字段取第一个
+                    avg_scores[key] = all_scores[0][key]  # Non-numeric fields: keep the first
 
-            # 添加稳定性指标
+            # Stability statistics
             consistency_scores = [s['consistency_score'] for s in all_scores]
             avg_scores['sample_std'] = np.std(consistency_scores)
             avg_scores['sample_min'] = np.min(consistency_scores)
@@ -521,15 +521,15 @@ class BMCEstimatorDream:
         alg_temp: float,
         return_details: bool
     ) -> Dict[str, float]:
-        """单次探测（增强错误处理版）"""
+        """Run a single probing pass."""
         try:
-            # 自适应t_probe
+            # Adaptive t_probe
             if self.adaptive_t:
                 t_probe_adjusted = self.compute_adaptive_t(question, t_probe)
             else:
                 t_probe_adjusted = t_probe
 
-            # 🔥 根据任务类型动态调整max_length
+            # Pick max_length according to the task type
             if self.task_name == 'gpqa':
                 question_max_length = 384
                 full_text_max_length = 768
@@ -540,9 +540,9 @@ class BMCEstimatorDream:
                 question_max_length = 256
                 full_text_max_length = 512
 
-            # 🔥 NEW: 使用chat template构建输入
+            # Build the input with the chat template
             if self.use_chat_template and self.system_prompt:
-                # 构建完整对话（包含生成的答案）
+                # Build the full conversation, including the generated answer
                 messages_full = [
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": question},
@@ -552,10 +552,10 @@ class BMCEstimatorDream:
                 full_text = self.tokenizer.apply_chat_template(
                     messages_full,
                     tokenize=False,
-                    add_generation_prompt=False  # 已经有assistant内容
+                    add_generation_prompt=False  # The assistant turn is already present
                 )
                 
-                # 编码完整文本
+                # Encode the full text
                 input_ids = self.tokenizer.encode(
                     full_text,
                     return_tensors='pt',
@@ -563,7 +563,7 @@ class BMCEstimatorDream:
                     truncation=True
                 ).to(self.device)
                 
-                # 构建question部分（用于定位answer起始位置）
+                # Build the question part, used to locate where the answer starts
                 messages_question = [
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": question}
@@ -572,7 +572,7 @@ class BMCEstimatorDream:
                 question_with_template = self.tokenizer.apply_chat_template(
                     messages_question,
                     tokenize=False,
-                    add_generation_prompt=True  # 添加<|assistant|>标记
+                    add_generation_prompt=True  # Append the <|assistant|> marker
                 )
                 
                 question_ids = self.tokenizer.encode(
@@ -585,7 +585,7 @@ class BMCEstimatorDream:
                 answer_start_idx = question_ids.size(1)
                 
             else:
-                # 保留原有逻辑（向后兼容）
+                # Legacy path, kept for backward compatibility
                 full_text = question + answer
                 input_ids = self.tokenizer.encode(
                     full_text,
@@ -603,15 +603,15 @@ class BMCEstimatorDream:
 
                 answer_start_idx = question_ids.size(1)
 
-            # 检查有效性
+            # Sanity check
             if answer_start_idx >= input_ids.size(1):
-                logger.warning(f"答案起始位置({answer_start_idx})超出序列长度({input_ids.size(1)})")
+                logger.warning(f"Answer start index ({answer_start_idx}) exceeds the sequence length ({input_ids.size(1)})")
                 return self._default_scores("", t_probe_adjusted)
 
-            # 2. 前向扩散
+            # 2. Forward diffusion
             masked_ids = self.forward_diffusion(input_ids, t_probe_adjusted, answer_start_idx)
 
-            # 3. 反向扩散（使用确定性模式）
+            # 3. Reverse diffusion (deterministic mode)
             reconstructed_ids, avg_neg_entropy = self.reverse_diffusion(
                 masked_ids,
                 question_ids,
@@ -619,10 +619,10 @@ class BMCEstimatorDream:
                 temperature=0.1,
                 alg_temp=alg_temp,
                 track_confidence=True,
-                deterministic=True  # 确保结果可复现
+                deterministic=True  # Keep results reproducible
             )
 
-            # 4. 计算一致性
+            # 4. Compute consistency
             scores = self.compute_consistency_score(
                 input_ids,
                 reconstructed_ids,
@@ -631,7 +631,7 @@ class BMCEstimatorDream:
                 avg_neg_entropy
             )
 
-            # 5. 重构文本
+            # 5. Reconstructed text
             scores['reconstructed_text'] = self.tokenizer.decode(
                 reconstructed_ids[0, answer_start_idx:],
                 skip_special_tokens=True
@@ -640,18 +640,18 @@ class BMCEstimatorDream:
             scores['t_probe_used'] = t_probe_adjusted
             scores['avg_confidence'] = avg_neg_entropy
 
-            # 简化：移除负熵统计
+            # Simplified: the negative-entropy statistics were removed.
             # if return_details:
             #     scores['confidence_stats'] = {...}
 
             return scores
 
         except Exception as e:
-            logger.error(f"探测过程出错: {e}", exc_info=True)
+            logger.error(f"Error during probing: {e}", exc_info=True)
             return self._default_scores("", t_probe)
 
     def _default_scores(self, recon_text: str, t_probe: float = 0.0) -> Dict:
-        """返回默认分数"""
+        """Return the fallback score dictionary."""
         return {
             'token_accuracy': 0.0,
             'sequence_accuracy': 0.0,
@@ -669,44 +669,44 @@ class BMCEstimatorDream:
             'error': True
         }
     
-    # ==================== 🔥 通用答案提取器 ====================
+    # ==================== Universal answer extractor ====================
     
     def extract_final_answer_universal(self, text: str) -> Tuple[str, float]:
         """
-        通用答案提取器 - 根据任务类型自动选择
+        Universal answer extractor; dispatches on the task type.
         
         Returns:
-            (答案, 提取置信度)
+            (answer, extraction confidence)
         """
         if not text:
             return "", 0.0
         
-        # 🔥 选择题任务
+        # Multiple-choice tasks
         if self.is_choice_task:
             return self._extract_choice_answer(text)
         
-        # 🔥 数学任务（数值答案）
+        # Math tasks (numeric answers)
         elif self.is_math_task:
             return self._extract_numeric_answer(text)
         
-        # 🔥 代码任务（通常依赖task_config）
+        # Code tasks (usually handled through task_config)
         elif self.is_code_task:
-            # 代码任务通常不需要简单提取，返回全文
+            # Code tasks rarely need simple extraction; return the whole text
             return text, 0.5
         
-        # 默认：尝试数值提取
+        # Default: attempt numeric extraction
         else:
             return self._extract_numeric_answer(text)
     
     def _extract_choice_answer(self, text: str) -> Tuple[str, float]:
-        """提取选择题答案（A/B/C/D/E等）"""
+        """Extract a multiple-choice answer (A/B/C/D/E...)."""
         
-        # 优先级1: \\boxed{X} 格式（最可靠）
+        # Priority 1: \\boxed{X} format (most reliable)
         match = re.search(r'\\boxed\{([A-E])\}', text, re.IGNORECASE)
         if match:
             return match.group(1).upper(), 1.0
         
-        # 优先级2: <answer>标签内
+        # Priority 2: inside an <answer> tag
         answer_section = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
         if answer_section:
             match = re.search(r'\b([A-E])\b', answer_section.group(1), re.IGNORECASE)
@@ -716,7 +716,7 @@ class BMCEstimatorDream:
             if match:
                 return match.group(1).upper(), 0.95
         
-        # 优先级3: 显式答案声明
+        # Priority 3: explicit answer statements
         patterns = [
             (r'The correct answer is[:\s]*([A-E])\b', 0.90),
             (r'The answer is[:\s]*([A-E])\b', 0.85),
@@ -730,7 +730,7 @@ class BMCEstimatorDream:
             if match:
                 return match.group(1).upper(), conf
         
-        # 优先级4: 独立的选项字母（低置信度）
+        # Priority 4: a bare option letter (low confidence)
         matches = re.findall(r'\b([A-E])\b', text, re.IGNORECASE)
         if matches:
             unique_choices = set(m.upper() for m in matches)
@@ -744,9 +744,9 @@ class BMCEstimatorDream:
         return "", 0.0
     
     def _extract_numeric_answer(self, text: str) -> Tuple[str, float]:
-        """提取数值答案"""
+        """Extract a numeric answer."""
         
-        # 🔥 优先级1: <answer>标签内
+        # Priority 1: inside an <answer> tag
         answer_section = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
         if answer_section:
             answer_text = answer_section.group(1)
@@ -757,7 +757,7 @@ class BMCEstimatorDream:
                 except:
                     pass
         
-        # 🔥 优先级2: #### 标记（GSM8K标准）
+        # Priority 2: the #### marker (GSM8K convention)
         match = re.search(r'####\s*(-?\d+\.?\d*)', text)
         if match:
             try:
@@ -765,7 +765,7 @@ class BMCEstimatorDream:
             except:
                 pass
         
-        # 🔥 优先级3: 显式答案句式
+        # Priority 3: explicit answer phrasings
         patterns = [
             (r'The final answer is[:\s]+(-?\d+\.?\d*)', 0.90),
             (r'The answer is[:\s]+(-?\d+\.?\d*)', 0.85),
@@ -784,7 +784,7 @@ class BMCEstimatorDream:
                 except:
                     continue
         
-        # 🔥 优先级4: 兜底 - 最后的数字（低置信度）
+        # Priority 4: fallback to the last number in the text (low confidence)
         numbers = re.findall(r'-?\d+\.?\d*', text)
         if numbers:
             try:
@@ -800,7 +800,7 @@ class BMCEstimatorDream:
         
         return "", 0.0
     
-    # ==================== 🔥 改进的答案匹配 ====================
+    # ==================== Answer matching ====================
     
     def _compute_final_answer_match(
         self, 
@@ -809,13 +809,13 @@ class BMCEstimatorDream:
         original_answer: str
     ) -> Tuple[float, float, float]:
         """
-        🔥 修复版：评分用二值化，诊断保留置信度
+        Score the match as a binary value, but keep the extraction confidences for diagnostics.
         
         Returns:
             (match_score, orig_conf, recon_conf)
         """
         
-        # 优先使用task_config
+        # Prefer the task-specific configuration
         if self.task_config:
             try:
                 extractor = self.task_config.get('extractor')
@@ -829,10 +829,10 @@ class BMCEstimatorDream:
                         return 0.0, 0.0, 0.0
                     
                     try:
-                        # 🔥 FIX: validator返回(bool, dict)元组，需要解包
+                        # The validator returns a (bool, dict) tuple, so unpack it
                         result = validator(recon_extracted, orig_extracted)
                         if isinstance(result, tuple):
-                            is_match = result[0]  # 取第一个元素（bool）
+                            is_match = result[0]  # First element is the boolean verdict
                         else:
                             is_match = result
                         return (1.0 if is_match else 0.0), 1.0, 1.0
@@ -842,7 +842,7 @@ class BMCEstimatorDream:
             except Exception as e:
                 pass
         
-        # 通用提取器
+        # Fall back to the universal extractor
         orig_ans, orig_conf = self.extract_final_answer_universal(orig_text)
         recon_ans, recon_conf = self.extract_final_answer_universal(recon_text)
         
@@ -855,7 +855,7 @@ class BMCEstimatorDream:
         return match_score, orig_conf, recon_conf
 
     def extract_final_answer(self, text: str) -> str:
-        """向后兼容的答案提取（仅返回答案字符串）"""
+        """Backward-compatible extraction that returns only the answer string."""
         answer, _ = self.extract_final_answer_universal(text)
         return answer
 
@@ -868,15 +868,15 @@ class BMCEstimatorDream:
         avg_neg_entropy: float = -1.0
     ) -> Dict[str, float]:
         """
-        改进的评分函数（修复版）
+        Scoring function for the probing results.
 
-        主要改进：
-        1. 动态负熵归一化
-        2. 更详细的调试信息
-        3. 更鲁棒的错误处理
+        Design notes:
+        1. Dynamic negative-entropy normalization
+        2. More detailed debug information
+        3. More robust error handling
         """
 
-        # 解码文本
+        # Decode both texts
         try:
             orig_text = self.tokenizer.decode(
                 original_ids[0, answer_start_idx:],
@@ -888,11 +888,11 @@ class BMCEstimatorDream:
                 skip_special_tokens=True
             ).strip()
         except Exception as e:
-            logger.error(f"文本解码失败: {e}")
+            logger.error(f"Failed to decode text: {e}")
             return self._default_scores("")
 
         if not orig_text or not recon_text:
-            logger.warning("原始文本或重构文本为空")
+            logger.warning("The original or reconstructed text is empty")
             return self._default_scores(recon_text)
 
         # 1. Token-level accuracy
@@ -908,7 +908,7 @@ class BMCEstimatorDream:
             token_acc = 0.0
             seq_acc = 0.0
 
-        # 2. 语义相似度
+        # 2. Semantic similarity
         semantic_sim = 0.0
         if self.semantic_encoder is not None:
             try:
@@ -917,10 +917,10 @@ class BMCEstimatorDream:
                 semantic_sim = float(np.dot(orig_emb, recon_emb) /
                                 (np.linalg.norm(orig_emb) * np.linalg.norm(recon_emb)))
             except Exception as e:
-                logger.debug(f"语义相似度计算失败: {e}")
+                logger.debug(f"Failed to compute semantic similarity: {e}")
                 semantic_sim = 0.0
 
-        # 3. 数字保留率
+        # 3. Number retention rate
         orig_numbers = re.findall(r'\d+', orig_text)
         recon_numbers = re.findall(r'\d+', recon_text)
 
@@ -934,24 +934,24 @@ class BMCEstimatorDream:
         else:
             number_retention = 1.0 if len(recon_numbers) == 0 else 0.5
 
-        # 4. 字符级相似度
+        # 4. Character-level similarity
         char_sim = SequenceMatcher(None, orig_text, recon_text).ratio()
 
-        # 5. 🔥 最终答案匹配（使用新的方法）
+        # 5. Final-answer match
         final_answer_match, orig_extr_conf, recon_extr_conf = self._compute_final_answer_match(
             orig_text, recon_text, original_answer
         )
         
-        # 🔥 提取最终答案用于后续判断
+        # Extract the final answers for the checks below
         orig_final, _ = self.extract_final_answer_universal(orig_text)
         recon_final, _ = self.extract_final_answer_universal(recon_text)
 
-        # 简化：直接使用avg_confidence（已经是max概率，在[0,1]范围）
+        # Simplified: avg_confidence is already a max probability within [0, 1]
         entropy_confidence = avg_neg_entropy
 
-        # 7. 评分策略：优化权重 > Aggressive > 默认
+        # 7. Scoring strategy: optimized weights > aggressive > default
         if self.use_optimized_weights:
-            # 🔥 使用优化权重
+            # Use the optimized weights
             consistency_score = (
                 self.optimized_weights.get('token_accuracy', 0) * token_acc +
                 self.optimized_weights.get('semantic_similarity', 0) * semantic_sim +
@@ -976,11 +976,11 @@ class BMCEstimatorDream:
                     0.08 * char_sim
                 )
 
-                # 双重惩罚
+                # Penalty for a diverging final answer
                 if recon_final and recon_final != orig_final:
                     consistency_score *= 0.6
 
-                # 低置信度惩罚
+                # Penalty for low confidence
                 if entropy_confidence < 0.5:
                     consistency_score *= 0.9
         else:
@@ -1014,7 +1014,7 @@ class BMCEstimatorDream:
             'recon_final_answer': recon_final,
         }
 
-    # ===== 新增：批量处理支持 =====
+    # ===== Batch processing support =====
     def probe_batch(
         self,
         questions: List[str],
@@ -1023,9 +1023,9 @@ class BMCEstimatorDream:
         num_reverse_steps: int = 5
     ) -> List[Dict[str, float]]:
         """
-        批量处理多个question-answer对
+        Probe several question-answer pairs.
 
-        注意：当前实现是逐个处理，未来可以优化为真正的批量处理
+        Note: the current implementation loops over the pairs rather than batching them.
         """
         results = []
         for q, a in zip(questions, answers):
@@ -1033,12 +1033,12 @@ class BMCEstimatorDream:
                 result = self.probe(q, a, t_probe, num_reverse_steps)
                 results.append(result)
             except Exception as e:
-                logger.error(f"批量处理失败: {e}")
+                logger.error(f"Batch processing failed: {e}")
                 results.append(self._default_scores("", t_probe))
 
         return results
 
-    # ===== Coding 专用 BMC 探测 =====
+    # ===== BMC probing specialized for coding tasks =====
     def probe_code(
         self,
         question: str,
@@ -1050,20 +1050,20 @@ class BMCEstimatorDream:
         return_details: bool = False
     ) -> Dict[str, float]:
         """
-        Coding 任务专用的 BMC 探测流程
+        BMC probing pipeline specialized for coding tasks.
 
-        与标准 probe() 的核心区别：
-        1. 不依赖 <answer> 标签定位（代码任务不一定有标签）
-        2. 评分使用代码专用指标（AST有效性、结构匹配等）
-        3. 不使用 number_retention（对代码无意义）
-        4. 使用 code_execution_match 替代 final_answer_match
+        Key differences from the standard probe():
+        1. Does not rely on <answer> tags (code outputs may not carry them)
+        2. Scores with code-specific metrics (AST validity, structural match, ...)
+        3. Drops number_retention, which is meaningless for code
+        4. Uses code_execution_match instead of final_answer_match
 
-        新增 Coding 专用指标：
-        - ast_validity_orig: 原始代码 AST 有效性
-        - ast_validity_recon: 重构代码 AST 有效性
-        - function_signature_match: 函数签名匹配
-        - structural_match: AST 结构匹配
-        - code_execution_match: 执行结果一致性
+        Code-specific metrics:
+        - ast_validity_orig: AST validity of the original code
+        - ast_validity_recon: AST validity of the reconstructed code
+        - function_signature_match: Function signature match
+        - structural_match: AST structural match
+        - code_execution_match: Agreement of the execution results
         """
         try:
             import sys
@@ -1076,16 +1076,16 @@ class BMCEstimatorDream:
         except ImportError:
             pass
 
-        # 自适应 t_probe
+        # Adaptive t_probe
         if self.adaptive_t:
             t_probe_adjusted = self.compute_adaptive_t(question, t_probe)
         else:
             t_probe_adjusted = t_probe
 
-        # 代码任务需要更长的上下文
+        # Code tasks need a longer context
         code_max_length = 4096
 
-        # === 构建完整文本（使用 chat template）===
+        # === Build the full text with the chat template ===
         if self.use_chat_template and self.system_prompt:
             messages_full = [
                 {"role": "system", "content": self.system_prompt},
@@ -1143,28 +1143,28 @@ class BMCEstimatorDream:
             answer_start_idx = question_ids.size(1)
 
         if answer_start_idx >= input_ids.size(1):
-            logger.warning(f"答案起始位置超出序列长度")
+            logger.warning(f"Answer start index exceeds the sequence length")
             return self._default_scores_code(t_probe_adjusted)
 
-        # === 提取原始代码 ===
+        # === Extract the original code ===
         def _extract_code(text):
             import re
-            # 先去除特殊 token（因为 tokenizer.decode 不会自动跳过它们）
+            # Strip special tokens first, since tokenizer.decode does not skip them
             text = re.sub(r'<\|im_(?:end|start)\|>', '', text)
             text = re.sub(r'<\|endoftext\|>', '', text)
-            # ```python ... ``` 块
+            # ```python ... ``` block
             m = re.search(r'```python\s*\n?(.*?)```', text, re.DOTALL)
             if m:
                 return m.group(1).strip()
-            # ``` ... ``` 块
+            # ``` ... ``` block
             m = re.search(r'```\s*\n?(.*?)```', text, re.DOTALL)
             if m:
                 return m.group(1).strip()
-            # <answer> 标签
+            # <answer> tag
             m = re.search(r'<answer>\s*(.*?)\s*</answer>', text, re.DOTALL | re.IGNORECASE)
             if m:
                 return m.group(1).strip()
-            # 如果看起来像代码
+            # Otherwise, keep the span that looks like code
             if 'def ' in text or 'import ' in text:
                 lines = text.split('\n')
                 for i, line in enumerate(lines):
@@ -1180,10 +1180,10 @@ class BMCEstimatorDream:
         orig_code = _extract_code(orig_text_decoded)
         orig_code = orig_code if orig_code else orig_text_decoded
 
-        # === 前向扩散 ===
+        # === Forward diffusion ===
         masked_ids = self.forward_diffusion(input_ids, t_probe_adjusted, answer_start_idx)
 
-        # === 反向扩散 ===
+        # === Reverse diffusion ===
         reconstructed_ids, avg_conf = self.reverse_diffusion(
             masked_ids,
             question_ids,
@@ -1194,7 +1194,7 @@ class BMCEstimatorDream:
             deterministic=True
         )
 
-        # === 提取重构代码 ===
+        # === Extract the reconstructed code ===
         recon_text_decoded = self.tokenizer.decode(
             reconstructed_ids[0, answer_start_idx:],
             skip_special_tokens=True
@@ -1203,7 +1203,7 @@ class BMCEstimatorDream:
         recon_code = _extract_code(recon_text_decoded)
         recon_code = recon_code if recon_code else recon_text_decoded
 
-        # === Coding 专用评分 ===
+        # === Code-specific scoring ===
         scores = self._compute_code_consistency(
             original_ids=input_ids,
             reconstructed_ids=reconstructed_ids,
@@ -1220,7 +1220,7 @@ class BMCEstimatorDream:
         return scores
 
     def _default_scores_code(self, t_probe: float = 0.0) -> Dict:
-        """返回代码任务的默认分数"""
+        """Return the fallback score dictionary for code tasks."""
         return {
             'token_accuracy': 0.0,
             'sequence_accuracy': 0.0,
@@ -1229,7 +1229,7 @@ class BMCEstimatorDream:
             'consistency_score': 0.0,
             'avg_confidence': 0.0,
             't_probe_used': t_probe,
-            # Coding 专用
+            # Code-specific metrics
             'ast_validity_orig': 0.0,
             'ast_validity_recon': 0.0,
             'function_signature_match': 0.0,
@@ -1250,13 +1250,13 @@ class BMCEstimatorDream:
         ground_truth: dict = None,
     ) -> Dict[str, float]:
         """
-        Coding 任务专用的评分函数 (v2 - 优化版)
+        Scoring function specialized for coding tasks.
 
-        主要改进（基于消融实验结果）:
-        1. 新增 `orig_exec_score`：原始代码直接执行得分（不依赖重构）
-        2. 新增 `divergence_penalty`：衡量重构与原始的偏离程度
-        3. 修复重构失败时的评分崩塌
-        4. 分离"重构一致性"和"代码质量"两个维度
+        Design notes (informed by the ablation study):
+        1. `orig_exec_score` scores the original code directly, independent of reconstruction
+        2. `divergence_penalty` measures how far the reconstruction drifts from the original
+        3. Avoids the score collapse that occurred when reconstruction failed
+        4. Separates "reconstruction consistency" from "code quality"
         """
         import re
         from difflib import SequenceMatcher
@@ -1280,7 +1280,7 @@ class BMCEstimatorDream:
         else:
             char_sim = 0.0
 
-        # === 3. 语义相似度 ===
+        # === 3. Semantic similarity ===
         semantic_sim = 0.0
         if self.semantic_encoder is not None and original_code and reconstructed_code:
             try:
@@ -1291,7 +1291,7 @@ class BMCEstimatorDream:
             except Exception:
                 semantic_sim = 0.0
 
-        # === 4. AST 有效性 ===
+        # === 4. AST validity ===
         def _check_ast(code_str):
             if not code_str:
                 return 0.0
@@ -1305,7 +1305,7 @@ class BMCEstimatorDream:
         ast_validity_orig = _check_ast(original_code)
         ast_validity_recon = _check_ast(reconstructed_code)
 
-        # === 5. 函数签名匹配 ===
+        # === 5. Function signature match ===
         def _extract_sig(code_str):
             if not code_str:
                 return None
@@ -1316,7 +1316,7 @@ class BMCEstimatorDream:
         sig_recon = _extract_sig(reconstructed_code)
         sig_match = 1.0 if sig_orig and sig_recon and sig_orig == sig_recon else 0.0
 
-        # === 6. AST 结构相似度 ===
+        # === 6. AST structural similarity ===
         def _compute_ast_sim(code1, code2):
             if not code1 or not code2:
                 return 0.0
@@ -1336,7 +1336,7 @@ class BMCEstimatorDream:
 
         struct_match = _compute_ast_sim(original_code, reconstructed_code)
 
-        # === 7. 执行结果一致性 + 原始代码执行得分 ===
+        # === 7. Execution agreement plus the original code's execution score ===
         exec_match = 0.0
         exec_method = None
         orig_exec_score = 0.0
@@ -1372,7 +1372,7 @@ class BMCEstimatorDream:
                 except Exception:
                     exec_match = 0.0
 
-        # === 7b. 重构偏离惩罚 ===
+        # === 7b. Reconstruction divergence penalty ===
         recon_failure_penalty = 1.0 if ast_validity_recon == 0.0 else 0.0
         divergence_penalty = (
             0.25 * (1.0 - char_sim) +
@@ -1382,7 +1382,7 @@ class BMCEstimatorDream:
         )
         divergence_penalty = min(max(divergence_penalty, 0.0), 1.0)
 
-        # === 8. 综合评分 ===
+        # === 8. Overall score ===
         if self.use_optimized_weights and self.optimized_weights:
             consistency_score = (
                 self.optimized_weights.get('token_accuracy', 0) * token_acc +
@@ -1397,16 +1397,16 @@ class BMCEstimatorDream:
                 self.optimized_weights.get('divergence_penalty', 0) * (1.0 - divergence_penalty)
             )
         elif self.aggressive_scoring:
-            # v2 激进评分策略（基于消融实验优化）
-            # 消融实验关键发现:
-            #   1. OrigExec × Char = 1.0000 ROC-AUC（exec可用时完美分离）
-            #   2. Char × Struct × OrigExec = 0.9221
-            #   3. Char Similarity = 0.5682（不依赖重构的指标更可靠）
-            #   4. V1 BMC Score = 0.4829（比随机还差）
+            # Aggressive scoring strategy, tuned on the ablation study.
+            # Key findings of the ablation:
+            #   1. OrigExec x Char = 1.0000 ROC-AUC (perfect separation when exec is available)
+            #   2. Char x Struct x OrigExec = 0.9221
+            #   3. Char Similarity = 0.5682 (metrics independent of reconstruction are more reliable)
+            #   4. The earlier BMC score = 0.4829 (worse than chance)
             #
-            # 核心公式:
-            #   - exec 可用时: exec × char × struct → 完美
-            #   - exec 不可用时: char × struct（不需要 divergence penalty）
+            # Resulting formula:
+            #   - exec available: exec x char x struct
+            #   - exec unavailable: char x struct (no divergence penalty needed)
 
             if ast_validity_orig == 1.0 and ast_validity_recon == 1.0:
                 if orig_exec_score > 0:

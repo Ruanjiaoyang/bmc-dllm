@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Dream模型 - BMC Resampling实验验证脚本
-完全对齐LLaDA的parse_comparison.py逻辑
+Dream model - verification script for the BMC resampling experiments.
+Mirrors the logic of LLaDA's parse_comparison.py exactly.
 """
 
 import json
@@ -14,36 +14,36 @@ import numpy as np
 
 
 # ============================================================
-# 答案提取逻辑 - 与LLaDA完全一致
+# Answer extraction logic - identical to LLaDA
 # ============================================================
 
 def try_import_is_equiv():
-    """尝试从基础eval导入is_equiv函数"""
+    """Try to import the is_equiv function from the base eval code."""
     try:
         from parser_helper import is_equiv
-        print("✓ 成功导入基础eval的is_equiv函数（用于MATH）")
+        print("[OK] Imported is_equiv from the base eval code (used for MATH)")
         return is_equiv
     except ImportError:
-        print("⚠️  未找到parser_helper.is_equiv，MATH将使用简单字符串比较")
+        print("[WARN] parser_helper.is_equiv not found; MATH will fall back to plain string comparison")
         return None
 
-# 尝试导入is_equiv
+# Try to import is_equiv
 base_is_equiv = try_import_is_equiv()
 
 
 class BuiltinParser:
-    """内置答案提取器 - 与LLaDA完全一致"""
+    """Built-in answer extractor - identical to LLaDA."""
     
     @staticmethod
     def extract_answer_gsm8k(text: str) -> str:
-        """GSM8K答案提取 - #### 格式"""
+        """GSM8K answer extraction - #### format."""
         if not isinstance(text, str):
             text = str(text) if text is not None else ""
         
-        # 移除<EOS>等特殊标记
+        # Strip special markers such as <EOS>
         text = re.sub(r'<[^>]+>', '', text)
         
-        # 查找#### 标记
+        # Look for the #### marker
         match = re.search(r'####\s*([+-]?[\d,\.]+)', text)
         if match:
             answer = match.group(1)
@@ -53,7 +53,7 @@ class BuiltinParser:
             except:
                 return answer
         
-        # 如果没有####，尝试提取最后一个数字
+        # Without ####, fall back to the last number in the text
         numbers = re.findall(r'[+-]?[\d,]+\.?\d*', text)
         if numbers:
             answer = numbers[-1].replace(',', '')
@@ -66,11 +66,11 @@ class BuiltinParser:
     
     @staticmethod
     def extract_answer_boxed(text: str) -> str:
-        """MATH答案提取 - \\boxed{} 格式"""
+        """MATH answer extraction - \\boxed{} format."""
         if not isinstance(text, str):
             text = str(text) if text is not None else ""
         
-        # 如果文本很短且不包含LaTeX解题过程标记，可能已经是纯答案
+        # Short text without LaTeX solution markers is likely already a bare answer
         text_stripped = text.strip()
         if len(text_stripped) < 100 and '\\boxed' not in text_stripped:
             if not any(marker in text_stripped for marker in ['. ', '? ', '! ', '\n\n']):
@@ -78,20 +78,20 @@ class BuiltinParser:
                 if clean_text:
                     return clean_text.strip()
         
-        # 移除<EOS>等特殊标记
+        # Strip special markers such as <EOS>
         text = re.sub(r'<[^>]+>', '', text)
         
-        # 查找\\boxed{}
+        # Look for \\boxed{}
         matches = re.findall(r'\\boxed\{([^}]+)\}', text)
         if matches:
             return matches[-1].strip()
         
-        # 尝试查找<answer>标签
+        # Otherwise look for an <answer> tag
         match = re.search(r'<answer>([^<]+)</answer>', text)
         if match:
             return match.group(1).strip()
         
-        # 最后的fallback
+        # Final fallback
         if len(text.strip()) < 50:
             return text.strip()
         
@@ -99,24 +99,24 @@ class BuiltinParser:
     
     @staticmethod
     def extract_answer_gpqa(text: str) -> str:
-        """GPQA答案提取 - 选择题 A/B/C/D"""
+        """GPQA answer extraction - multiple choice A/B/C/D."""
         if not isinstance(text, str):
             text = str(text) if text is not None else ""
         
-        # 移除<EOS>等特殊标记
+        # Strip special markers such as <EOS>
         text = re.sub(r'<[^>]+>', '', text)
         
-        # 查找\\boxed{A/B/C/D}
+        # Look for \\boxed{A/B/C/D}
         boxed_matches = re.findall(r'\\boxed\{([A-Da-d])\}', text)
         if boxed_matches:
             return boxed_matches[-1].upper()
         
-        # 查找<answer>A/B/C/D</answer>
+        # Look for <answer>A/B/C/D</answer>
         answer_match = re.search(r'<answer>([A-Da-d])</answer>', text)
         if answer_match:
             return answer_match.group(1).upper()
         
-        # 查找最后出现的单独的A/B/C/D
+        # Fall back to the last standalone A/B/C/D
         choice_matches = re.findall(r'\b([A-D])\b', text)
         if choice_matches:
             return choice_matches[-1].upper()
@@ -125,24 +125,24 @@ class BuiltinParser:
     
     @staticmethod
     def extract_answer_arc(text: str) -> str:
-        """ARC答案提取 - 选择题 A/B/C/D/E (ARC可能有5个选项)"""
+        """ARC answer extraction - multiple choice A/B/C/D/E (ARC may have 5 options)."""
         if not isinstance(text, str):
             text = str(text) if text is not None else ""
         
-        # 移除<EOS>等特殊标记
+        # Strip special markers such as <EOS>
         text = re.sub(r'<[^>]+>', '', text)
         
-        # 查找\\boxed{A/B/C/D/E}
+        # Look for \\boxed{A/B/C/D/E}
         boxed_matches = re.findall(r'\\boxed\{([A-Ea-e])\}', text)
         if boxed_matches:
             return boxed_matches[-1].upper()
         
-        # 查找<answer>A/B/C/D/E</answer>
+        # Look for <answer>A/B/C/D/E</answer>
         answer_match = re.search(r'<answer>([A-Ea-e])</answer>', text)
         if answer_match:
             return answer_match.group(1).upper()
         
-        # 查找最后出现的单独的A/B/C/D/E
+        # Fall back to the last standalone A/B/C/D/E
         choice_matches = re.findall(r'\b([A-E])\b', text)
         if choice_matches:
             return choice_matches[-1].upper()
@@ -152,18 +152,18 @@ class BuiltinParser:
     @classmethod
     def parse_answers(cls, task: str, predictions: List[str], ground_truths: List[str], debug: bool = False) -> Tuple[int, int, List[Dict]]:
         """
-        解析答案并判断正确性
+        Parse answers and judge correctness.
         
         Args:
-            task: 任务名称 (gsm8k, math)
-            predictions: 预测答案列表
-            ground_truths: 真实答案列表
-            debug: 是否打印调试信息
+            task: task name (gsm8k, math)
+            predictions: list of predicted answers
+            ground_truths: list of reference answers
+            debug: whether to print debug information
         
         Returns:
-            (正确数量, 处理数量, 详细结果列表)
+            (number correct, number processed, list of per-sample results)
         """
-        # 选择提取器
+        # Pick the extractor
         if task == "gsm8k":
             extractor = cls.extract_answer_gsm8k
         elif task == "math":
@@ -179,42 +179,42 @@ class BuiltinParser:
         processed = 0
         detailed_results = []
         
-        # 调试计数器
+        # Debug counters
         empty_pred_count = 0
         empty_gt_count = 0
         
         for idx, (pred_text, gt_text) in enumerate(zip(predictions, ground_truths)):
-            # 确保都是字符串
+            # Make sure both sides are strings
             if not isinstance(pred_text, str):
                 pred_text = str(pred_text) if pred_text is not None else ""
             if not isinstance(gt_text, str):
                 gt_text = str(gt_text) if gt_text is not None else ""
             
-            # 提取答案
+            # Extract the answer
             pred_answer = extractor(pred_text)
             
             if task in ["gpqa", "arc"]:
-                # 选择题任务: ground_truth已经是答案（A/B/C/D/E）
+                # Multiple choice: ground_truth is already the answer letter (A/B/C/D/E)
                 gt_answer = gt_text.strip().upper()
             else:
-                # 其他任务: 需要从文本中提取
+                # Other tasks: extract the answer from the text
                 gt_answer = extractor(gt_text)
             
-            # 调试：记录空答案
+            # Debug: count empty answers
             if not pred_answer:
                 empty_pred_count += 1
             if not gt_answer:
                 empty_gt_count += 1
             
-            # 调试：打印前3个样本的提取结果
+            # Debug: show the extraction result for the first 3 samples
             if debug and idx < 3:
-                print(f"\n  提取结果 {idx+1}:")
+                print(f"\n  Extraction result {idx+1}:")
                 print(f"    GT text: {repr(gt_text[:80] if len(gt_text) > 80 else gt_text)}")
                 print(f"    GT extracted: {repr(gt_answer)}")
                 print(f"    Pred text: {repr(pred_text[:80] if len(pred_text) > 80 else pred_text)}")
                 print(f"    Pred extracted: {repr(pred_answer)}")
             
-            # 判断正确性
+            # Judge correctness
             is_correct = False
             
             if gt_answer:
@@ -222,7 +222,7 @@ class BuiltinParser:
                 
                 if pred_answer:
                     if task == "math":
-                        # 使用基础eval的is_equiv函数（数学等价性检查）
+                        # Use is_equiv from the base eval code (mathematical equivalence)
                         if base_is_equiv is not None:
                             try:
                                 is_correct = base_is_equiv(pred_answer, gt_answer)
@@ -231,13 +231,13 @@ class BuiltinParser:
                         else:
                             is_correct = (pred_answer.strip() == gt_answer.strip())
                     elif task == "gsm8k":
-                        # 数值答案
+                        # Numeric answer
                         try:
                             is_correct = (float(pred_answer) == float(gt_answer))
                         except:
                             is_correct = (pred_answer == gt_answer)
                     elif task in ["gpqa", "arc"]:
-                        # 选择题
+                        # Multiple choice
                         is_correct = (pred_answer == gt_answer)
                     
                     if is_correct:
@@ -251,48 +251,48 @@ class BuiltinParser:
                 "correct": is_correct,
             })
         
-        # 打印调试统计
+        # Print debug statistics
         if debug:
-            print(f"\n提取统计:")
-            print(f"  总样本数: {len(predictions)}")
-            print(f"  空预测答案: {empty_pred_count}")
-            print(f"  空GT答案: {empty_gt_count}")
-            print(f"  成功处理: {processed}")
-            print(f"  正确: {correct}")
+            print(f"\nExtraction statistics:")
+            print(f"  Total samples: {len(predictions)}")
+            print(f"  Empty predictions: {empty_pred_count}")
+            print(f"  Empty ground truths: {empty_gt_count}")
+            print(f"  Successfully processed: {processed}")
+            print(f"  Correct: {correct}")
         
         return correct, processed, detailed_results
 
 
 # ============================================================
-# 方法特定的验证逻辑
+# Method-specific verification logic
 # ============================================================
 
 def verify_greedy(generations: List[Dict], task: str) -> List[Dict]:
-    """验证Greedy方法"""
+    """Verify the Greedy method."""
     verified = []
     
     for item in generations:
-        # 🔥 提取时间信息（对齐LLaDA）
+        # Timing information (aligned with LLaDA)
         elapsed_time = item.get("method_info", {}).get("elapsed_time", 0.0)
         
         verified.append({
             "question": item["question"],
             "ground_truth": item["ground_truth"],
-            "generations": item["generations"],  # 单个字符串
-            "elapsed_time": elapsed_time,  # 🔥 添加时间
+            "generations": item["generations"],  # single string
+            "elapsed_time": elapsed_time,
         })
     
     return verified
 
 
 def verify_self_consistency(generations: List[Dict], task: str) -> List[Dict]:
-    """验证Self-Consistency方法"""
+    """Verify the Self-Consistency method."""
     verified = []
     
     for item in generations:
         candidates = item["generations"]  # List of strings
         
-        # 提取所有候选答案
+        # Extract the answer of every candidate
         if task == "gsm8k":
             extractor = BuiltinParser.extract_answer_gsm8k
         elif task == "math":
@@ -306,13 +306,13 @@ def verify_self_consistency(generations: List[Dict], task: str) -> List[Dict]:
         
         extracted_answers = [extractor(c) for c in candidates]
         
-        # 多数投票
+        # Majority vote
         answer_counts = Counter([a for a in extracted_answers if a])
         
         if answer_counts:
             final_answer_extracted, _ = answer_counts.most_common(1)[0]
-            # 找到第一个匹配的完整文本
-            final_answer_text = candidates[0]  # 默认第一个
+            # Find the first full text matching the winning answer
+            final_answer_text = candidates[0]  # default to the first candidate
             for i, ans in enumerate(extracted_answers):
                 if ans == final_answer_extracted:
                     final_answer_text = candidates[i]
@@ -320,7 +320,7 @@ def verify_self_consistency(generations: List[Dict], task: str) -> List[Dict]:
         else:
             final_answer_text = candidates[0] if candidates else ""
         
-        # 🔥 提取时间信息（对齐LLaDA）
+        # Timing information (aligned with LLaDA)
         elapsed_time = item.get("method_info", {}).get("elapsed_time", 0.0)
         
         verified.append({
@@ -328,26 +328,26 @@ def verify_self_consistency(generations: List[Dict], task: str) -> List[Dict]:
             "ground_truth": item["ground_truth"],
             "generations": final_answer_text,
             "num_candidates": len(candidates),
-            "elapsed_time": elapsed_time,  # 🔥 添加时间
+            "elapsed_time": elapsed_time,
         })
     
     return verified
 
 
 def verify_best_of_n_confidence(generations: List[Dict], task: str) -> List[Dict]:
-    """验证Best-of-N (Confidence)方法"""
+    """Verify the Best-of-N (Confidence) method."""
     verified = []
     
     for item in generations:
         candidates_with_conf = item["generations"]  # List of {"text": ..., "confidence": ...}
         
-        # 选择confidence最高的
+        # Pick the candidate with the highest confidence
         if candidates_with_conf:
             best_candidate = max(candidates_with_conf, key=lambda x: x["confidence"])
         else:
             best_candidate = {"text": "", "confidence": 0.0}
         
-        # 🔥 提取时间信息（对齐LLaDA）
+        # Timing information (aligned with LLaDA)
         elapsed_time = item.get("method_info", {}).get("elapsed_time", 0.0)
         
         verified.append({
@@ -356,26 +356,26 @@ def verify_best_of_n_confidence(generations: List[Dict], task: str) -> List[Dict
             "generations": best_candidate["text"],
             "best_confidence": best_candidate["confidence"],
             "num_candidates": len(candidates_with_conf),
-            "elapsed_time": elapsed_time,  # 🔥 添加时间
+            "elapsed_time": elapsed_time,
         })
     
     return verified
 
 
 def verify_best_of_n_bmc(generations: List[Dict], task: str) -> List[Dict]:
-    """验证Best-of-N (BMC)方法"""
+    """Verify the Best-of-N (BMC) method."""
     verified = []
     
     for item in generations:
         candidates_with_bmc = item["generations"]  # List of {"text": ..., "bmc_score": ...}
         
-        # 选择BMC分数最高的
+        # Pick the candidate with the highest BMC score
         if candidates_with_bmc:
             best_candidate = max(candidates_with_bmc, key=lambda x: x["bmc_score"])
         else:
             best_candidate = {"text": "", "bmc_score": 0.0}
         
-        # 🔥 提取时间信息（对齐LLaDA）
+        # Timing information (aligned with LLaDA)
         elapsed_time = item.get("method_info", {}).get("elapsed_time", 0.0)
         
         verified.append({
@@ -384,21 +384,21 @@ def verify_best_of_n_bmc(generations: List[Dict], task: str) -> List[Dict]:
             "generations": best_candidate["text"],
             "best_bmc_score": best_candidate["bmc_score"],
             "num_candidates": len(candidates_with_bmc),
-            "elapsed_time": elapsed_time,  # 🔥 添加时间
+            "elapsed_time": elapsed_time,
         })
     
     return verified
 
 
 def verify_bmc_guided(generations: List[Dict], task: str) -> List[Dict]:
-    """验证BMC-Guided方法"""
+    """Verify the BMC-Guided method."""
     verified = []
     
     for item in generations:
         attempts = item["generations"]  # List of {"text": ..., "bmc_score": ...}
         method_info = item.get("method_info", {})
         
-        # 选择BMC分数最高的
+        # Pick the attempt with the highest BMC score
         if attempts:
             best_attempt = max(attempts, key=lambda x: x["bmc_score"])
         else:
@@ -419,11 +419,11 @@ def verify_bmc_guided(generations: List[Dict], task: str) -> List[Dict]:
 
 
 # ============================================================
-# 主处理流程
+# Main processing pipeline
 # ============================================================
 
 def merge_distributed_results(results_dir: str, dataset: str, method: str, gen_length: int, steps: int) -> List[Dict]:
-    """合并所有rank的结果"""
+    """Merge the result files of all ranks."""
     pattern = f"{results_dir}/{dataset}_{method}_{gen_length}_{steps}_*_generations.json"
     files = sorted(glob.glob(pattern))
     
@@ -441,37 +441,37 @@ def merge_distributed_results(results_dir: str, dataset: str, method: str, gen_l
 
 
 def process_method(results_dir: str, dataset: str, method: str, task: str, debug: bool = False):
-    """处理单个方法的结果"""
+    """Process the results of a single method."""
     print(f"\n{'=' * 80}")
-    print(f"处理: {dataset} - {method}")
+    print(f"Processing: {dataset} - {method}")
     print(f"{'=' * 80}")
     
-    # 查找结果文件
+    # Locate the result files
     pattern = f"{results_dir}/{dataset}_{method}_*_*_*_generations.json"
     files = glob.glob(pattern)
     
     if not files:
-        print(f"⚠️  未找到结果文件: {pattern}")
+        print(f"[WARN] No result files found: {pattern}")
         return None
     
-    # 从第一个文件获取gen_length和steps
+    # Read gen_length and steps from the first file
     with open(files[0], 'r') as f:
         data = json.load(f)
         gen_length = data.get("gen_length", 128)
         steps = data.get("diffusion_steps", 64)
     
-    # 合并所有rank的结果
-    print(f"合并结果文件: {len(files)} 个文件")
+    # Merge the results of all ranks
+    print(f"Merging result files: {len(files)} files")
     all_generations = merge_distributed_results(results_dir, dataset, method, gen_length, steps)
     
     if not all_generations:
-        print(f"⚠️  没有生成数据")
+        print(f"[WARN] No generation data")
         return None
     
-    print(f"总样本数: {len(all_generations)}")
+    print(f"Total samples: {len(all_generations)}")
     
-    # 根据方法类型进行验证
-    method_base = method.split('_N')[0]  # 移除N3/N10后缀
+    # Verify according to the method type
+    method_base = method.split('_N')[0]  # strip the N3/N10 suffix
     
     if method_base == "greedy":
         verified_data = verify_greedy(all_generations, task)
@@ -484,22 +484,22 @@ def process_method(results_dir: str, dataset: str, method: str, task: str, debug
     elif method_base == "bmc_guided":
         verified_data = verify_bmc_guided(all_generations, task)
     else:
-        print(f"⚠️  未知方法: {method_base}")
+        print(f"[WARN] Unknown method: {method_base}")
         return None
     
-    # 提取predictions和ground_truths
+    # Collect predictions and ground truths
     predictions = [item["generations"] for item in verified_data]
     ground_truths = [item["ground_truth"] for item in verified_data]
     
-    # 确定任务类型（用于答案提取）
-    # 对于gpqa和arc，使用原始数据集名称
+    # Determine the task type used for answer extraction;
+    # gpqa and arc use the original dataset name
     parse_task = dataset if dataset in ["gpqa", "arc"] else task
     
-    # 调试：打印前几个样本检查格式
+    # Debug: print the first few samples to check their format
     if debug:
-        print(f"\n调试信息 - 前3个样本:")
+        print(f"\nDebug info - first 3 samples:")
         for i in range(min(3, len(verified_data))):
-            print(f"\n样本 {i+1}:")
+            print(f"\nSample {i+1}:")
             gt = ground_truths[i]
             pred = predictions[i]
             print(f"  Ground truth type: {type(gt).__name__}")
@@ -507,27 +507,27 @@ def process_method(results_dir: str, dataset: str, method: str, task: str, debug
             print(f"  Prediction type: {type(pred).__name__}")
             print(f"  Prediction: {repr(pred[:100] if isinstance(pred, str) and len(pred) > 100 else pred)}")
     
-    # 使用parser解析答案
+    # Parse the answers
     correct, processed, detailed_results = BuiltinParser.parse_answers(parse_task, predictions, ground_truths, debug=debug)
     
     accuracy = correct / processed if processed > 0 else 0.0
     
-    print(f"✓ 正确: {correct}/{processed} = {accuracy*100:.2f}%")
+    print(f"[OK] Correct: {correct}/{processed} = {accuracy*100:.2f}%")
     
-    # 计算平均样本数
+    # Average number of samples
     avg_samples = calculate_avg_samples(method, verified_data)
-    print(f"✓ 平均样本数: {avg_samples:.2f}")
+    print(f"[OK] Avg samples: {avg_samples:.2f}")
     
-    # 🔥 新增：时间统计（对齐LLaDA）
+    # Timing statistics (aligned with LLaDA)
     time_stats = calculate_time_stats(verified_data)
     if time_stats["has_timing"]:
-        print(f"✓ 平均时间/样本: {time_stats['avg_time_per_sample']:.2f}s")
-        print(f"✓ 总时间: {time_stats['total_time']:.2f}s")
-        print(f"✓ 中位数时间: {time_stats['median_time']:.2f}s")
+        print(f"[OK] Avg time/sample: {time_stats['avg_time_per_sample']:.2f}s")
+        print(f"[OK] Total time: {time_stats['total_time']:.2f}s")
+        print(f"[OK] Median time: {time_stats['median_time']:.2f}s")
     else:
-        print(f"⚠️  该方法未记录时间信息")
+        print(f"[WARN] No timing information recorded for this method")
     
-    # 保存aggregated结果
+    # Save the aggregated results
     output_file = f"{results_dir}/{dataset}_{method}_aggregated.json"
     output_data = {
         "dataset": dataset,
@@ -536,7 +536,7 @@ def process_method(results_dir: str, dataset: str, method: str, task: str, debug
         "processed": processed,
         "accuracy": accuracy,
         "avg_samples": avg_samples,
-        # 🔥 新增时间字段（对齐LLaDA）
+        # Timing fields (aligned with LLaDA)
         "avg_time_per_sample": time_stats["avg_time_per_sample"],
         "total_time": time_stats["total_time"],
         "median_time": time_stats["median_time"],
@@ -547,22 +547,22 @@ def process_method(results_dir: str, dataset: str, method: str, task: str, debug
     with open(output_file, 'w') as f:
         json.dump(output_data, f, indent=2)
     
-    print(f"✓ 保存结果: {output_file}")
+    print(f"[OK] Results saved: {output_file}")
     
     return output_data
 
 
 def calculate_avg_samples(method: str, verified_data: List[Dict]) -> float:
-    """计算平均样本数"""
+    """Compute the average number of samples per question."""
     method_base = method.split('_N')[0]
     
     if method_base == "greedy":
         return 1.0
     elif method_base in ["self_consistency", "best_of_n_confidence", "best_of_n_bmc"]:
-        # 从verified_data中获取num_candidates
+        # Read num_candidates from verified_data
         if verified_data and "num_candidates" in verified_data[0]:
             return float(verified_data[0]["num_candidates"])
-        # 或者从method名称推断
+        # Otherwise infer it from the method name
         if '_N' in method:
             try:
                 n = int(method.split('_N')[1])
@@ -571,7 +571,7 @@ def calculate_avg_samples(method: str, verified_data: List[Dict]) -> float:
                 pass
         return 1.0
     elif method_base == "bmc_guided":
-        # BMC-Guided使用实际的尝试次数
+        # BMC-Guided uses the actual number of attempts
         attempts = [item.get("num_attempts", 1) for item in verified_data]
         return float(np.mean(attempts))
     
@@ -580,21 +580,21 @@ def calculate_avg_samples(method: str, verified_data: List[Dict]) -> float:
 
 def calculate_time_stats(verified_data: List[Dict]) -> Dict:
     """
-    🔥 新增：计算时间统计（对齐LLaDA）
+    Compute timing statistics (aligned with LLaDA).
 
     Returns:
         Dict with keys:
-            - has_timing: bool, 是否有时间记录
-            - avg_time_per_sample: float, 平均时间/样本
-            - total_time: float, 总时间
-            - median_time: float, 中位数时间
-            - std_time: float, 标准差
+            - has_timing: bool, whether timing was recorded
+            - avg_time_per_sample: float, average time per sample
+            - total_time: float, total time
+            - median_time: float, median time
+            - std_time: float, standard deviation
     """
     times = []
 
     for item in verified_data:
         t = item.get("elapsed_time", 0.0)
-        if t > 0:  # 只统计有效时间
+        if t > 0:  # only count valid timings
             times.append(t)
 
     has_timing = len(times) > 0
@@ -628,32 +628,32 @@ def main():
     args = parser.parse_args()
     
     if not os.path.exists(args.results_dir):
-        print(f"❌ 结果目录不存在: {args.results_dir}")
+        print(f"[ERROR] Results directory does not exist: {args.results_dir}")
         return
     
     print("\n" + "=" * 80)
-    print("Dream模型 - BMC Resampling实验验证脚本")
+    print("Dream model - BMC Resampling experiment verification script")
     print("=" * 80)
     
-    # 检测数据集和方法
+    # Detect the available datasets and methods
     all_files = glob.glob(f"{args.results_dir}/*_generations.json")
     
     if not all_files:
-        print(f"❌ 未找到任何结果文件")
+        print(f"[ERROR] No result files found")
         return
     
-    # 提取数据集和方法
+    # Extract the dataset and method names
     datasets_methods = set()
     for filepath in all_files:
         filename = os.path.basename(filepath)
-        # 解析: dataset_method_genlength_steps_rank_generations.json
+        # Format: dataset_method_genlength_steps_rank_generations.json
         parts = filename.replace('_generations.json', '').split('_')
         if len(parts) >= 4:
             dataset = parts[0]
-            # method可能包含N3/N10等
+            # The method name may contain suffixes such as N3/N10
             method_parts = []
             for i, part in enumerate(parts[1:]):
-                if part.isdigit() and i > 0:  # 遇到数字（gen_length）
+                if part.isdigit() and i > 0:  # a number marks gen_length
                     break
                 method_parts.append(part)
             method = '_'.join(method_parts)
@@ -661,15 +661,15 @@ def main():
     
     datasets_methods = sorted(datasets_methods)
     
-    print(f"\n发现 {len(datasets_methods)} 个数据集-方法组合:")
+    print(f"\nFound {len(datasets_methods)} dataset-method combinations:")
     for dataset, method in datasets_methods:
         print(f"  - {dataset}: {method}")
     
-    # 处理所有方法
+    # Process every method
     results = {}
     
     for dataset, method in datasets_methods:
-        # 确定任务类型
+        # Determine the task type
         task = dataset  # gsm8k, math
         
         result = process_method(args.results_dir, dataset, method, task, debug=args.debug)
@@ -680,16 +680,16 @@ def main():
             results[dataset][method] = result
     
     print("\n" + "=" * 80)
-    print("✅ 验证完成!")
+    print("[OK] Verification complete!")
     print("=" * 80)
-    print(f"\n总结:")
+    print(f"\nSummary:")
     for dataset in sorted(results.keys()):
         print(f"\n{dataset.upper()}:")
         for method in sorted(results[dataset].keys()):
             r = results[dataset][method]
             print(f"  {method:35s}: {r['accuracy']*100:6.2f}% ({r['correct']}/{r['processed']})")
     
-    print(f"\n💡 下一步: python analyze_mgrs_dream.py --results_dir {args.results_dir}")
+    print(f"\nNext step: python analyze_mgrs_dream.py --results_dir {args.results_dir}")
 
 
 if __name__ == "__main__":

@@ -3,8 +3,8 @@
 cd "$(dirname "$0")/.."
 
 # ============================================================
-# 🔬 Masking Strategy Ablation - t_probe
-# 测试不同masking比例的影响
+# Masking Strategy Ablation - t_probe
+# Measures the effect of different masking ratios.
 # t ∈ {0.0, 0.3, 0.5, 0.7, 0.9, 1.0}
 # ============================================================
 
@@ -17,23 +17,23 @@ SEMANTIC_MODEL_PATH="${SEMANTIC_MODEL_PATH:-sentence-transformers/all-MiniLM-L6-
 
 GEN_LENGTH=128
 BATCH_SIZE=8
-NUM_REVERSE_STEPS=16  # 使用最佳T_backward=16
-NUM_SAMPLES=4         # 使用N=4（或改为2/3根据你的选择）
+NUM_REVERSE_STEPS=16  # Best T_backward found in the ablation
+NUM_SAMPLES=4         # Ensemble size N (set to 2 or 3 for a cheaper run)
 
-# 🔥 优化权重路径（根据实际情况修改）
+# Path to the optimized scoring weights (adjust to your setup)
 OPTIMIZED_WEIGHTS_PATH="weights/gsm8k.json"
 
 OUTPUT_BASE="ablation_masking_$(date +%Y%m%d_%H%M%S)"
 
-# 计算GPU数量
+# Derive the GPU count from the device list
 IFS=',' read -ra GPU_ARRAY <<< "$GPU_IDS"
 NUM_GPUS=${#GPU_ARRAY[@]}
 
-# 环境变量
+# Environment
 export HF_ALLOW_CODE_EVAL=1
 
 echo "========================================================================"
-echo "🔬 Masking Strategy Ablation - t_probe"
+echo "Masking Strategy Ablation - t_probe"
 echo "========================================================================"
 echo "Task:           $TASK"
 echo "GPUs:           $GPU_IDS (${NUM_GPUS} GPUs)"
@@ -44,43 +44,43 @@ echo "Weights:        $OPTIMIZED_WEIGHTS_PATH"
 echo "Output Base:    $OUTPUT_BASE"
 echo "========================================================================"
 
-# 检查权重文件
+# Validate the weights file
 if [ ! -z "$OPTIMIZED_WEIGHTS_PATH" ]; then
     if [[ "$OPTIMIZED_WEIGHTS_PATH" == *"*"* ]]; then
         WEIGHTS_FILE=$(ls $OPTIMIZED_WEIGHTS_PATH 2>/dev/null | head -n 1)
         if [ ! -z "$WEIGHTS_FILE" ]; then
             OPTIMIZED_WEIGHTS_PATH="$WEIGHTS_FILE"
-            echo "✅ Found weights: $OPTIMIZED_WEIGHTS_PATH"
+            echo "[OK] Found weights: $OPTIMIZED_WEIGHTS_PATH"
         else
-            echo "⚠️  Warning: No weights file found"
+            echo "[WARN] No weights file found"
             OPTIMIZED_WEIGHTS_PATH=""
         fi
     elif [ ! -f "$OPTIMIZED_WEIGHTS_PATH" ]; then
-        echo "⚠️  Warning: Weights file not found"
+        echo "[WARN] Weights file not found"
         OPTIMIZED_WEIGHTS_PATH=""
     else
-        echo "✅ Using weights: $OPTIMIZED_WEIGHTS_PATH"
+        echo "[OK] Using weights: $OPTIMIZED_WEIGHTS_PATH"
     fi
 fi
 
 # ============================================================
-# 运行函数
+# Experiment runner
 # ============================================================
 run_experiment() {
     local t_probe=$1
-    # 格式化t_probe为字符串（替换.为_）
+    # Turn t_probe into a filename-safe string by replacing "." with "_"
     local t_str=$(echo $t_probe | sed 's/\./_/g')
     local output_dir="${OUTPUT_BASE}/t_probe_${t_str}"
     
     echo ""
     echo "========================================================================"
-    echo "🚀 Running: t_probe = $t_probe"
+    echo "Running: t_probe = $t_probe"
     echo "Output: $output_dir"
     echo "========================================================================"
     
     local start_time=$(date +%s)
     
-    # 构建命令
+    # Build the command
     local CMD="CUDA_VISIBLE_DEVICES=$GPU_IDS torchrun \
         --nproc_per_node $NUM_GPUS \
         --master_port $MASTER_PORT \
@@ -96,68 +96,68 @@ run_experiment() {
         --num_samples $NUM_SAMPLES \
         --aggressive_scoring"
     
-    # 添加优化权重
+    # Append the optimized weights
     if [ ! -z "$OPTIMIZED_WEIGHTS_PATH" ]; then
         CMD="$CMD --optimized_weights_path \"$OPTIMIZED_WEIGHTS_PATH\""
     fi
     
     CMD="$CMD --suffix \"t_probe_${t_str}\""
     
-    # 执行命令
+    # Run the command
     eval $CMD
     
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
     
     if [ $? -eq 0 ]; then
-        echo "✅ t_probe=$t_probe completed (${duration}s)"
-        echo "⏱️  Inference time: ${duration}s"
+        echo "[OK] t_probe=$t_probe completed (${duration}s)"
+        echo "Inference time: ${duration}s"
         echo "$t_probe,$duration" >> "${OUTPUT_BASE}/timing_results.csv"
     else
-        echo "❌ t_probe=$t_probe failed"
+        echo "[ERROR] t_probe=$t_probe failed"
         return 1
     fi
 }
 
-# 初始化timing文件
+# Initialize the timing file
 echo "t_probe,inference_time_seconds" > "${OUTPUT_BASE}/timing_results.csv"
 
 # ============================================================
-# 实验1: t = 0.0 (只mask answer，不mask reasoning)
+# Experiment 1: t = 0.0 (mask the answer only, keep reasoning intact)
 # ============================================================
 run_experiment 0.0
 
 # ============================================================
-# 实验2: t = 0.3 (轻度mask reasoning)
+# Experiment 2: t = 0.3 (light masking of the reasoning)
 # ============================================================
 run_experiment 0.3
 
 # ============================================================
-# 实验3: t = 0.5 (中度mask reasoning)
+# Experiment 3: t = 0.5 (moderate masking of the reasoning)
 # ============================================================
 run_experiment 0.5
 
 # ============================================================
-# 实验4: t = 0.7 (较高mask reasoning)
+# Experiment 4: t = 0.7 (heavy masking of the reasoning)
 # ============================================================
 run_experiment 0.7
 
 # ============================================================
-# 实验5: t = 0.9 (默认，高度mask reasoning)
+# Experiment 5: t = 0.9 (default, very heavy masking of the reasoning)
 # ============================================================
 run_experiment 0.9
 
 # ============================================================
-# 实验6: t = 1.0 (完全mask reasoning + answer)
+# Experiment 6: t = 1.0 (fully mask both reasoning and answer)
 # ============================================================
 run_experiment 1.0
 
 # ============================================================
-# 总结
+# Summary
 # ============================================================
 echo ""
 echo "========================================================================"
-echo "✅ All experiments completed!"
+echo "[OK] All experiments completed!"
 echo "========================================================================"
 echo "Results saved to: $OUTPUT_BASE"
 echo ""

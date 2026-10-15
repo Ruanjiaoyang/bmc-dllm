@@ -53,14 +53,14 @@ def generate(
     cfg_scale=0.0,
     remasking="low_confidence",
     mask_id=None,
-    return_confidence=False,  # 🔥 NEW: 是否返回置信度
+    return_confidence=False,  # whether to also return per-token confidence
 ):
     """
     Optimized version of the generate function.
-    
-    🔥 NEW Args:
+
+    Args:
         return_confidence: If True, return (generated_ids, confidence_scores)
-                          confidence_scores: [batch_size, gen_length] 平均置信度
+                          confidence_scores: [batch_size, gen_length] average confidence
     """
     # Auto-detect mask_id from tokenizer config (supports both LLaDA-8B and LLaDA-MoE)
     if mask_id is None:
@@ -84,7 +84,7 @@ def generate(
         num_blocks = gen_length // block_length
         steps_per_block = max(1, steps // num_blocks)
         
-        # 🔥 NEW: 记录每个token的置信度
+        # Track the confidence of every generated token
         if return_confidence:
             confidence_tracker = torch.zeros(
                 (prompt.shape[0], gen_length), 
@@ -149,18 +149,18 @@ def generate(
                         _, select_indices = torch.topk(confidence[j], k=num_tokens)
                         x[j, select_indices] = x0[j, select_indices]
                         
-                        # 🔥 NEW: 记录被unmask的token的置信度
+                        # Record the confidence of the tokens that were just unmasked
                         if return_confidence:
-                            # 只记录生成部分的置信度
+                            # Only track confidence for the generated segment
                             gen_select_indices = select_indices[select_indices >= prompt.shape[1]]
                             if len(gen_select_indices) > 0:
                                 gen_relative_indices = gen_select_indices - prompt.shape[1]
                                 confidence_tracker[j, gen_relative_indices] += x0_p[j, gen_select_indices]
                                 confidence_counts[j, gen_relative_indices] += 1
         
-        # 🔥 NEW: 计算平均置信度
+        # Compute the average confidence
         if return_confidence:
-            # 避免除零
+            # Avoid division by zero
             confidence_counts = torch.where(
                 confidence_counts > 0, 
                 confidence_counts, 

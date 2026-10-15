@@ -1,6 +1,6 @@
 """
-统一的数据集实现 - 基于 BaseReasoningDataset
-支持 GSM8K, MATH500, Sudoku, Countdown
+Unified dataset implementations built on BaseReasoningDataset.
+Supports GSM8K, MATH500, Sudoku and Countdown.
 """
 import torch
 import random
@@ -31,7 +31,7 @@ Your reasoning here
 
 
 class GSM8KDataset(BaseReasoningDataset):
-    """GSM8K 数据集"""
+    """GSM8K dataset."""
     
     TASK_NAME = "gsm8k"
     
@@ -46,12 +46,12 @@ class GSM8KDataset(BaseReasoningDataset):
         super().__init__(tokenizer, num_examples, add_reasoning, system_prompt, subsample)
     
     def load_test_dataset(self):
-        """加载 GSM8K 测试集"""
+        """Load the GSM8K test split."""
         self.dataset = load_dataset("gsm8k", "main", split="test")
         print(f"[GSM8K] Loaded {len(self.dataset)} test examples")
     
     def load_few_shot_examples(self):
-        """加载 GSM8K few-shot 示例"""
+        """Load GSM8K few-shot examples."""
         if self.num_examples == 0:
             return []
         
@@ -69,7 +69,7 @@ class GSM8KDataset(BaseReasoningDataset):
         return few_shot_examples
     
     def extract_answer(self, text: str) -> Optional[str]:
-        """提取答案"""
+        """Extract the answer."""
         return AnswerExtractor.extract_gsm8k(text)
     
     def check_correctness(
@@ -78,15 +78,15 @@ class GSM8KDataset(BaseReasoningDataset):
         ground_truth: Any,
         question: Optional[str] = None
     ) -> bool:
-        """检查正确性"""
+        """Check correctness."""
         return AnswerValidator.validate_gsm8k(generated_answer, ground_truth)
     
     def __getitem__(self, idx):
-        """获取样本"""
+        """Get a sample."""
         sample = self.dataset[self.subsample[idx].item()]
         question = sample["question"]
         
-        # 提取答案（从 #### 格式）
+        # Extract the answer from the #### format
         answer_text = sample["answer"]
         answer = self.extract_answer(answer_text)
         
@@ -109,7 +109,7 @@ Your reasoning here
 
 
 class MATH500Dataset(BaseReasoningDataset):
-    """MATH500 数据集"""
+    """MATH500 dataset."""
     
     TASK_NAME = "math"
     
@@ -124,12 +124,12 @@ class MATH500Dataset(BaseReasoningDataset):
         super().__init__(tokenizer, num_examples, add_reasoning, system_prompt, subsample)
     
     def load_test_dataset(self):
-        """加载 MATH500 测试集"""
+        """Load the MATH500 test split."""
         self.dataset = load_dataset("HuggingFaceH4/MATH-500", split="test")
         print(f"[MATH500] Loaded {len(self.dataset)} test examples")
     
     def load_few_shot_examples(self):
-        """加载 MATH few-shot 示例（从 hendrycks_math）"""
+        """Load MATH few-shot examples (from hendrycks_math)."""
         if self.num_examples == 0:
             return []
         
@@ -147,7 +147,7 @@ class MATH500Dataset(BaseReasoningDataset):
         return few_shot_examples
     
     def extract_answer(self, text: str) -> Optional[str]:
-        """提取答案"""
+        """Extract the answer."""
         return AnswerExtractor.extract_math500(text)
     
     def check_correctness(
@@ -156,11 +156,11 @@ class MATH500Dataset(BaseReasoningDataset):
         ground_truth: Any,
         question: Optional[str] = None
     ) -> bool:
-        """检查正确性"""
+        """Check correctness."""
         return AnswerValidator.validate_math500(generated_answer, ground_truth)
     
     def __getitem__(self, idx):
-        """获取样本"""
+        """Get a sample."""
         sample = self.dataset[self.subsample[idx].item()]
         question = sample["problem"]
         answer = sample["answer"]
@@ -193,7 +193,7 @@ Your step-by-step solving process
 
 
 class SudokuDataset(BaseReasoningDataset):
-    """Sudoku 4x4 数据集"""
+    """Sudoku 4x4 dataset."""
     
     TASK_NAME = "sudoku"
     
@@ -206,7 +206,7 @@ class SudokuDataset(BaseReasoningDataset):
         subsample: int = 256,
         sudoku_csv_path: str = None,
     ):
-        # 设置 CSV 路径
+        # Resolve the CSV path
         if sudoku_csv_path is None:
             cur_path = os.path.dirname(os.path.abspath(__file__))
             self.sudoku_file_path = f"{cur_path}/../dataset/4x4_test_sudoku.csv"
@@ -216,7 +216,7 @@ class SudokuDataset(BaseReasoningDataset):
         super().__init__(tokenizer, num_examples, add_reasoning, system_prompt, subsample)
     
     def load_test_dataset(self):
-        """加载 Sudoku 测试集（从 CSV）"""
+        """Load the Sudoku test set from CSV."""
         if not os.path.exists(self.sudoku_file_path):
             raise FileNotFoundError(f"Sudoku CSV not found: {self.sudoku_file_path}")
         
@@ -225,11 +225,11 @@ class SudokuDataset(BaseReasoningDataset):
         print(f"[Sudoku] Loaded {len(self.dataset)} test examples from {self.sudoku_file_path}")
     
     def load_few_shot_examples(self):
-        """Sudoku 暂不支持 few-shot"""
+        """Few-shot prompting is not supported for Sudoku."""
         return []
     
     def extract_answer(self, text: str) -> Optional[str]:
-        """提取答案"""
+        """Extract the answer."""
         return AnswerExtractor.extract_sudoku(text)
     
     def check_correctness(
@@ -237,17 +237,17 @@ class SudokuDataset(BaseReasoningDataset):
         generated_answer: Any, 
         ground_truth: Any,
         question: Optional[str] = None
-    ) -> Tuple[bool, dict]:  # 🔥 改为返回元组！
+    ) -> Tuple[bool, dict]:  # returns a tuple, unlike the base class
         """
-        检查正确性（修复：返回完整的验证结果）
+        Check correctness and return the full validation details.
         """
         is_correct, details = AnswerValidator.validate_sudoku(
             generated_answer, ground_truth, question
         )
-        return is_correct, details  # 返回完整结果
+        return is_correct, details
 
     def __getitem__(self, idx):
-        """获取样本"""
+        """Get a sample."""
         sample = self.dataset[self.subsample[idx].item()]
         puzzle = sample["Puzzle"]
         solution = sample["Solution"]
@@ -280,7 +280,7 @@ CTD_SYSTEM_PROMPT = (
 
 
 class CTDDataset(BaseReasoningDataset):
-    """Countdown 数据集"""
+    """Countdown dataset."""
 
     TASK_NAME = "countdown"
 
@@ -293,12 +293,12 @@ class CTDDataset(BaseReasoningDataset):
         subsample: int = 256,
         countdown_jsonl_path: str = None,
     ):
-        # Countdown 不支持 few-shot
+        # Few-shot prompting is not supported for Countdown
         if num_examples > 0:
             warnings.warn("num_examples must be 0 for Countdown dataset. Overriding to 0.")
             num_examples = 0
 
-        # 设置 JSONL 路径
+        # Resolve the JSONL path
         if countdown_jsonl_path is None:
             cur_path = os.path.dirname(os.path.abspath(__file__))
             self.countdown_file_path = f"{cur_path}/../dataset/countdown_cd3_test.jsonl"
@@ -308,7 +308,7 @@ class CTDDataset(BaseReasoningDataset):
         super().__init__(tokenizer, num_examples, add_reasoning, system_prompt, subsample)
 
     def load_test_dataset(self):
-        """加载 Countdown 测试集（从 JSONL）"""
+        """Load the Countdown test set from JSONL."""
         if not os.path.exists(self.countdown_file_path):
             raise FileNotFoundError(f"Countdown JSONL not found: {self.countdown_file_path}")
 
@@ -320,11 +320,11 @@ class CTDDataset(BaseReasoningDataset):
         print(f"[Countdown] Loaded {len(self.dataset)} test examples from {self.countdown_file_path}")
 
     def load_few_shot_examples(self):
-        """Countdown 不支持 few-shot"""
+        """Few-shot prompting is not supported for Countdown."""
         return []
 
     def extract_answer(self, text: str) -> Optional[str]:
-        """提取答案"""
+        """Extract the answer."""
         return AnswerExtractor.extract_countdown(text)
 
     def check_correctness(
@@ -333,14 +333,14 @@ class CTDDataset(BaseReasoningDataset):
         ground_truth: Any,
         question: Optional[str] = None
     ) -> bool:
-        """检查正确性"""
+        """Check correctness."""
         is_correct, details = AnswerValidator.validate_countdown(
             generated_answer, ground_truth, question
         )
         return is_correct
 
     def __getitem__(self, idx):
-        """获取样本"""
+        """Get a sample."""
         sample = self.dataset[self.subsample[idx].item()]
 
         target = int(sample["output"])
@@ -349,7 +349,7 @@ class CTDDataset(BaseReasoningDataset):
 
         question = f"Numbers: {numbers}\nTarget: {target}"
 
-        # ground_truth 是 (numbers, target) 元组
+        # ground_truth is a (numbers, target) tuple
         ground_truth = (numbers, target)
 
         prompt = self.create_prompt(question)
@@ -382,7 +382,7 @@ Format your response as:
 
 
 class HumanEvalDataset(BaseReasoningDataset):
-    """HumanEval 代码生成数据集"""
+    """HumanEval code-generation dataset."""
     
     TASK_NAME = "humaneval"
     
@@ -397,16 +397,16 @@ class HumanEvalDataset(BaseReasoningDataset):
         super().__init__(tokenizer, num_examples, add_reasoning, system_prompt, subsample)
     
     def load_test_dataset(self):
-        """加载 HumanEval 测试集"""
+        """Load the HumanEval test split."""
         self.dataset = load_dataset("openai/openai_humaneval", split="test")
         print(f"[HumanEval] Loaded {len(self.dataset)} test examples")
     
     def load_few_shot_examples(self):
-        """HumanEval 暂不支持 few-shot"""
+        """Few-shot prompting is not supported for HumanEval."""
         return []
     
     def extract_answer(self, text: str) -> Optional[str]:
-        """提取答案"""
+        """Extract the answer."""
         return AnswerExtractor.extract_humaneval(text)
     
     def check_correctness(
@@ -415,23 +415,23 @@ class HumanEvalDataset(BaseReasoningDataset):
         ground_truth: Any,
         question: Optional[str] = None
     ) -> Tuple[bool, dict]:
-        """检查正确性"""
+        """Check correctness."""
         is_correct, details = AnswerValidator.validate_humaneval(
             generated_answer, ground_truth, question
         )
         return is_correct, details
     
     def __getitem__(self, idx):
-        """获取样本"""
+        """Get a sample."""
         sample = self.dataset[self.subsample[idx].item()]
         
-        # HumanEval 的 prompt 包含函数签名和文档字符串
+        # The HumanEval prompt contains the function signature and docstring
         prompt_text = sample["prompt"]
         
-        # 构建问题描述
+        # Build the question text
         question = f"Complete the following Python function:\n\n```python\n{prompt_text}\n```"
         
-        # ground_truth 包含测试代码和入口点
+        # ground_truth holds the test code and the entry point
         ground_truth = {
             "test": sample["test"],
             "entry_point": sample["entry_point"],
@@ -468,7 +468,7 @@ Format your response as:
 
 
 class MBPPDataset(BaseReasoningDataset):
-    """MBPP 代码生成数据集"""
+    """MBPP code-generation dataset."""
     
     TASK_NAME = "mbpp"
     
@@ -483,16 +483,16 @@ class MBPPDataset(BaseReasoningDataset):
         super().__init__(tokenizer, num_examples, add_reasoning, system_prompt, subsample)
     
     def load_test_dataset(self):
-        """加载 MBPP 测试集"""
+        """Load the MBPP test split."""
         self.dataset = load_dataset("google-research-datasets/mbpp", "full", split="test")
         print(f"[MBPP] Loaded {len(self.dataset)} test examples")
     
     def load_few_shot_examples(self):
-        """MBPP 暂不支持 few-shot"""
+        """Few-shot prompting is not supported for MBPP."""
         return []
     
     def extract_answer(self, text: str) -> Optional[str]:
-        """提取答案"""
+        """Extract the answer."""
         return AnswerExtractor.extract_mbpp(text)
     
     def check_correctness(
@@ -501,29 +501,29 @@ class MBPPDataset(BaseReasoningDataset):
         ground_truth: Any,
         question: Optional[str] = None
     ) -> Tuple[bool, dict]:
-        """检查正确性"""
+        """Check correctness."""
         is_correct, details = AnswerValidator.validate_mbpp(
             generated_answer, ground_truth, question
         )
         return is_correct, details
     
     def __getitem__(self, idx):
-        """获取样本"""
+        """Get a sample."""
         sample = self.dataset[self.subsample[idx].item()]
         
-        # MBPP 的任务描述
+        # MBPP task description
         task_description = sample["text"]
         test_list = sample["test_list"]
         
-        # 构建问题描述
+        # Build the question text
         question = f"Task: {task_description}\n\nYour code should pass these tests:\n"
-        for i, test in enumerate(test_list[:3], 1):  # 只显示前3个测试
+        for i, test in enumerate(test_list[:3], 1):  # show only the first three tests
             question += f"{i}. {test}\n"
         
-        # ground_truth 包含测试用例列表
+        # ground_truth holds the list of test cases
         ground_truth = {
             "test_list": test_list,
-            "code": sample.get("code", "")  # 参考代码（如果有）
+            "code": sample.get("code", "")  # reference solution, if available
         }
         
         prompt = self.create_prompt(question)
@@ -550,7 +550,7 @@ Your detailed reasoning here
 
 
 class AIMEDataset(BaseReasoningDataset):
-    """AIME 数学竞赛数据集"""
+    """AIME competition-math dataset."""
     
     TASK_NAME = "aime"
     
@@ -565,7 +565,7 @@ class AIMEDataset(BaseReasoningDataset):
         super().__init__(tokenizer, num_examples, add_reasoning, system_prompt, subsample)
     
     def load_test_dataset(self):
-        """加载 AIME 测试集"""
+        """Load the AIME test split."""
         try:
             self.dataset = load_dataset("Auraithm/AIME2024", split="train")
             print(f"[AIME] Loaded {len(self.dataset)} test examples from AIME2024")
@@ -580,7 +580,7 @@ class AIMEDataset(BaseReasoningDataset):
                 print(f"[AIME] Loaded {len(self.dataset)} test examples from AI-MO")
     
     def load_few_shot_examples(self):
-        """加载 AIME few-shot 示例"""
+        """Load AIME few-shot examples."""
         if self.num_examples == 0:
             return []
         
@@ -600,7 +600,7 @@ class AIMEDataset(BaseReasoningDataset):
             return []
     
     def extract_answer(self, text: str) -> Optional[str]:
-        """提取答案"""
+        """Extract the answer."""
         return AnswerExtractor.extract_aime(text)
     
     def check_correctness(
@@ -609,16 +609,16 @@ class AIMEDataset(BaseReasoningDataset):
         ground_truth: Any,
         question: Optional[str] = None
     ) -> bool:
-        """检查正确性"""
+        """Check correctness."""
         return AnswerValidator.validate_aime(generated_answer, ground_truth)
     
     def __getitem__(self, idx):
-        """获取样本"""
+        """Get a sample."""
         sample = self.dataset[self.subsample[idx].item()]
         question = sample.get("question", sample.get("problem", ""))
         answer = sample.get("ground_truth_answer", sample.get("answer", sample.get("solution", "")))
         
-        # 提取整数答案
+        # Extract the integer answer
         if isinstance(answer, str):
             answer_match = re.search(r'\d+', answer)
             if answer_match:
@@ -652,7 +652,7 @@ Your detailed reasoning and solution here
 
 
 class OlympicDataset(BaseReasoningDataset):
-    """Olympic/IMO 数学竞赛数据集"""
+    """Olympiad/IMO competition-math dataset."""
     
     TASK_NAME = "olympic"
     
@@ -667,7 +667,7 @@ class OlympicDataset(BaseReasoningDataset):
         super().__init__(tokenizer, num_examples, add_reasoning, system_prompt, subsample)
     
     def load_test_dataset(self):
-        """加载 Olympic 测试集"""
+        """Load the Olympic test split."""
         try:
             self.dataset = load_dataset("Auraithm/OlympiadBench", split="train")
             print(f"[Olympic] Loaded {len(self.dataset)} test examples from OlympiadBench")
@@ -682,7 +682,7 @@ class OlympicDataset(BaseReasoningDataset):
                 print(f"[Olympic] Loaded {len(self.dataset)} test examples from AI-MO")
     
     def load_few_shot_examples(self):
-        """加载 Olympic few-shot 示例"""
+        """Load Olympic few-shot examples."""
         if self.num_examples == 0:
             return []
         
@@ -702,7 +702,7 @@ class OlympicDataset(BaseReasoningDataset):
             return []
     
     def extract_answer(self, text: str) -> Optional[str]:
-        """提取答案"""
+        """Extract the answer."""
         return AnswerExtractor.extract_olympic(text)
     
     def check_correctness(
@@ -711,11 +711,11 @@ class OlympicDataset(BaseReasoningDataset):
         ground_truth: Any,
         question: Optional[str] = None
     ) -> bool:
-        """检查正确性"""
+        """Check correctness."""
         return AnswerValidator.validate_olympic(generated_answer, ground_truth)
     
     def __getitem__(self, idx):
-        """获取样本"""
+        """Get a sample."""
         sample = self.dataset[self.subsample[idx].item()]
         question = sample.get("question", sample.get("problem", ""))
         answer = sample.get("ground_truth_answer", sample.get("answer", sample.get("solution", "")))
@@ -799,7 +799,7 @@ Where X is one of the available options (A, B, C, D, or E)"""
 
 
 class GPQADataset(BaseReasoningDataset):
-    """GPQA 研究生级别科学问答数据集"""
+    """GPQA graduate-level science QA dataset."""
     
     TASK_NAME = "gpqa"
     
@@ -816,7 +816,7 @@ class GPQADataset(BaseReasoningDataset):
         super().__init__(tokenizer, num_examples, add_reasoning, system_prompt, subsample)
     
     def load_test_dataset(self):
-        """加载 GPQA 测试集"""
+        """Load the GPQA test split."""
         try:
             if self.subset == "diamond":
                 self.dataset = load_dataset("Idavidrein/gpqa", "gpqa_diamond", split="train")
@@ -834,14 +834,14 @@ class GPQADataset(BaseReasoningDataset):
     
     def format_question_with_choices(self, item, shuffle_seed=None):
         """
-        格式化多选题（支持打乱选项）
+        Format a multiple-choice question, shuffling the options.
         
         Returns:
             tuple: (formatted_question, correct_letter)
         """
         question = item.get("Question", item.get("question", ""))
         
-        # 🔥 收集所有选项
+        # Collect all options
         all_choices = [
             ("Correct", item.get("Correct Answer", "")),
             ("Incorrect", item.get("Incorrect Answer 1", "")),
@@ -849,19 +849,19 @@ class GPQADataset(BaseReasoningDataset):
             ("Incorrect", item.get("Incorrect Answer 3", ""))
         ]
         
-        # 🔥 打乱选项
+        # Shuffle the options
         if shuffle_seed is None:
             shuffle_seed = hash(question)
         
         rng = random.Random(shuffle_seed)
         rng.shuffle(all_choices)
         
-        # 找到正确答案位置
+        # Locate the correct option
         correct_idx = next(i for i, (label, _) in enumerate(all_choices) 
                         if label == "Correct")
         correct_letter = chr(65 + correct_idx)
         
-        # 格式化
+        # Format the question
         formatted = f"{question}\n\n"
         for i, (_, choice_text) in enumerate(all_choices):
             formatted += f"{chr(65+i)}. {choice_text}\n"
@@ -869,7 +869,7 @@ class GPQADataset(BaseReasoningDataset):
         return formatted.strip(), correct_letter
     
     def load_few_shot_examples(self):
-        """加载 GPQA few-shot 示例"""
+        """Load GPQA few-shot examples."""
         if self.num_examples == 0:
             return []
         
@@ -886,7 +886,6 @@ class GPQADataset(BaseReasoningDataset):
             few_shot_examples = []
             for idx in samples:
                 item = train_data[idx]
-                # 🔥 修改：使用新的format方法
                 formatted_question, answer = self.format_question_with_choices(item)
                 few_shot_examples.append({"question": formatted_question, "answer": answer})
             
@@ -896,7 +895,7 @@ class GPQADataset(BaseReasoningDataset):
             return []
     
     def extract_answer(self, text: str) -> Optional[str]:
-        """提取答案"""
+        """Extract the answer."""
         return AnswerExtractor.extract_gpqa(text)
     
     def check_correctness(
@@ -905,13 +904,13 @@ class GPQADataset(BaseReasoningDataset):
         ground_truth: Any,
         question: Optional[str] = None
     ) -> bool:
-        """检查正确性"""
+        """Check correctness."""
         return AnswerValidator.validate_gpqa(generated_answer, ground_truth)
     
     def __getitem__(self, idx):
         sample = self.dataset[self.subsample[idx].item()]
         
-        # 收集所有选项
+        # Collect all options
         all_choices = [
             ("Correct", sample.get("Correct Answer", "")),
             ("Incorrect", sample.get("Incorrect Answer 1", "")),
@@ -919,18 +918,18 @@ class GPQADataset(BaseReasoningDataset):
             ("Incorrect", sample.get("Incorrect Answer 3", ""))
         ]
         
-        # 🔥 关键：使用问题hash作为种子
-        # 确保每个问题的顺序固定，但不同问题顺序不同
+        # Seed the shuffle with a hash of the question so that each question
+        # keeps a fixed option order while different questions differ
         question_text = sample.get("Question", "")
         rng = random.Random(hash(question_text))
         rng.shuffle(all_choices)
         
-        # 找到正确答案的位置
+        # Locate the correct option
         correct_idx = next(i for i, (label, _) in enumerate(all_choices) 
                           if label == "Correct")
         correct_letter = chr(65 + correct_idx)  # A, B, C, or D
         
-        # 格式化选项文本
+        # Format the option list
         choices_text = ""
         for i, (_, text) in enumerate(all_choices):
             choices_text += f"{chr(65+i)}. {text}\n"
@@ -946,7 +945,7 @@ class GPQADataset(BaseReasoningDataset):
 # ============================================================
 
 class LogiQADataset(BaseReasoningDataset):
-    """LogiQA 逻辑推理数据集"""
+    """LogiQA logical-reasoning dataset."""
     
     TASK_NAME = "logiqa"
     
@@ -963,7 +962,7 @@ class LogiQADataset(BaseReasoningDataset):
         super().__init__(tokenizer, num_examples, add_reasoning, system_prompt, subsample)
     
     def load_test_dataset(self):
-        """加载 LogiQA 测试集"""
+        """Load the LogiQA test split."""
         try:
             if self.dataset_name == "logikon/logikon-bench":
                 self.dataset = load_dataset("logikon/logikon-bench", "logiqa", split="test")
@@ -981,7 +980,7 @@ class LogiQADataset(BaseReasoningDataset):
     
     def format_question_with_choices(self, item, shuffle_seed=None):
         """
-        格式化多选题（支持打乱选项）
+        Format a multiple-choice question, shuffling the options.
         
         Returns:
             tuple: (formatted_question, correct_letter)
@@ -1061,7 +1060,7 @@ class LogiQADataset(BaseReasoningDataset):
             raise
     
     def load_few_shot_examples(self):
-        """加载 few-shot 示例"""
+        """Load few-shot examples."""
         if self.num_examples == 0:
             return []
         
@@ -1088,7 +1087,7 @@ class LogiQADataset(BaseReasoningDataset):
             return []
     
     def extract_answer(self, text: str) -> Optional[str]:
-        """提取答案"""
+        """Extract the answer."""
         return AnswerExtractor.extract_logiqa(text)
     
     def check_correctness(
@@ -1097,11 +1096,11 @@ class LogiQADataset(BaseReasoningDataset):
         ground_truth: Any,
         question: Optional[str] = None
     ) -> bool:
-        """检查正确性"""
+        """Check correctness."""
         return AnswerValidator.validate_logiqa(generated_answer, ground_truth)
     
     def __getitem__(self, idx):
-        """获取样本"""
+        """Get a sample."""
         item = self.dataset[self.subsample[idx].item()]
         question, answer = self.format_question_with_choices(item)
         prompt = self.create_prompt(question)
@@ -1113,7 +1112,7 @@ class LogiQADataset(BaseReasoningDataset):
 # ============================================================
 
 class ARCDataset(BaseReasoningDataset):
-    """ARC-Challenge 科学问答数据集"""
+    """ARC-Challenge science QA dataset."""
     
     TASK_NAME = "arc"
     
@@ -1128,7 +1127,7 @@ class ARCDataset(BaseReasoningDataset):
         super().__init__(tokenizer, num_examples, add_reasoning, system_prompt, subsample)
     
     def load_test_dataset(self):
-        """加载 ARC-Challenge 测试集"""
+        """Load the ARC-Challenge test split."""
         try:
             self.dataset = load_dataset("allenai/ai2_arc", "ARC-Challenge", split="test")
             print(f"[ARC] Loaded {len(self.dataset)} test examples from ARC-Challenge")
@@ -1137,7 +1136,7 @@ class ARCDataset(BaseReasoningDataset):
     
     def format_question_with_choices(self, item, shuffle_seed=None):
         """
-        格式化多选题（NO shuffling to match training framework）
+        Format a multiple-choice question (no shuffling, to match the training framework).
         
         Returns:
             tuple: (formatted_question, correct_letter)
@@ -1184,7 +1183,7 @@ class ARCDataset(BaseReasoningDataset):
             raise
     
     def load_few_shot_examples(self):
-        """加载 few-shot 示例"""
+        """Load few-shot examples."""
         if self.num_examples == 0:
             return []
         
@@ -1204,7 +1203,7 @@ class ARCDataset(BaseReasoningDataset):
             return []
     
     def extract_answer(self, text: str) -> Optional[str]:
-        """提取答案"""
+        """Extract the answer."""
         return AnswerExtractor.extract_arc(text)
     
     def check_correctness(
@@ -1213,11 +1212,11 @@ class ARCDataset(BaseReasoningDataset):
         ground_truth: Any,
         question: Optional[str] = None
     ) -> bool:
-        """检查正确性"""
+        """Check correctness."""
         return AnswerValidator.validate_arc(generated_answer, ground_truth)
     
     def __getitem__(self, idx):
-        """获取样本"""
+        """Get a sample."""
         item = self.dataset[self.subsample[idx].item()]
         question, answer = self.format_question_with_choices(item)
         prompt = self.create_prompt(question)
@@ -1225,7 +1224,7 @@ class ARCDataset(BaseReasoningDataset):
 
 
 # ============================================================
-# 数据集工厂
+# Dataset factory
 # ============================================================
 
 DATASET_MAP = {
@@ -1245,15 +1244,15 @@ DATASET_MAP = {
 
 def create_dataset(task_name: str, tokenizer, **kwargs):
     """
-    数据集工厂函数
+    Dataset factory.
     
     Args:
-        task_name: 任务名称 (gsm8k, math, sudoku, countdown, humaneval, mbpp)
+        task_name: task name (gsm8k, math, sudoku, countdown, humaneval, mbpp)
         tokenizer: HuggingFace tokenizer
-        **kwargs: 传递给数据集构造函数的其他参数
+        **kwargs: additional arguments forwarded to the dataset constructor
         
     Returns:
-        对应的数据集实例
+        The corresponding dataset instance.
     """
     task_name = task_name.lower()
     

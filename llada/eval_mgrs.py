@@ -1,13 +1,15 @@
 """
-BMC-Resampling 评估脚本 - 支持优化权重和自动合并分布式结果
-核心思路：利用BMC分数进行自适应重采样
-- 逐个生成候选答案
-- 每生成一个立即进行BMC评估
-- 如果BMC分数 > threshold，停止并接受该答案
-- 否则继续生成，直到达到max_attempts
+BMC-Resampling evaluation script with optimized weights and automatic merging of
+distributed results.
 
-🔥 NEW: 支持加载和使用优化后的权重
-🔥 FIXED: 自动合并所有rank的分布式结果
+Core idea: use the BMC score to drive adaptive resampling.
+- Generate candidate answers one at a time.
+- Score each candidate with BMC as soon as it is produced.
+- If the BMC score exceeds the threshold, stop and accept that candidate.
+- Otherwise keep generating until max_attempts is reached.
+
+Optimized weights are loaded automatically when available, and results from all
+ranks are merged at the end of the run.
 """
 import argparse
 import json
@@ -26,17 +28,17 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel
 from peft import PeftModel
 
-# 导入统一的数据集和工具
+# Unified dataset and task utilities
 from datasets_unified import create_dataset, DATASET_MAP
 from task_utils import get_task_config
 
-# 导入 BMC V2 和生成函数
+# BMC V2 estimator and the generation routine
 from bmc_core import BMCEstimator
 from generate import generate
 
 
 def init_seed(seed):
-    """初始化随机种子"""
+    """Initialize the random seeds."""
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
@@ -46,7 +48,7 @@ def init_seed(seed):
 
 
 def setup_ddp():
-    """设置分布式训练"""
+    """Set up distributed training."""
     dist.init_process_group("nccl")
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
@@ -54,12 +56,12 @@ def setup_ddp():
 
 
 def cleanup_ddp():
-    """清理分布式训练"""
+    """Tear down distributed training."""
     dist.destroy_process_group()
 
 
 class CustomDistributedSampler(DistributedSampler):
-    """自定义分布式采样器"""
+    """Distributed sampler that keeps every sample, even with uneven splits."""
 
     def __init__(
             self,
@@ -102,34 +104,34 @@ class CustomDistributedSampler(DistributedSampler):
 
 def load_optimized_weights(task_name: str = None, weights_path: str = None, verbose: bool = True):
     """
-    🔥 NEW: 自动加载最佳权重
+    Load the best available BMC feature weights.
 
-    优先级：
-    1. 如果指定了weights_path，直接加载
-    2. 否则搜索task_name相关的最佳权重
-    3. 都没有则返回None（使用默认aggressive_scoring）
+    Priority:
+    1. Load `weights_path` directly if it is given.
+    2. Otherwise search for the best weights matching `task_name`.
+    3. If nothing is found, return None (fall back to default aggressive_scoring).
 
     Returns:
-        Dict: 权重字典，如果没找到返回None
+        Dict: the weight dictionary, or None if no weights were found.
     """
     if weights_path:
-        # 指定了权重文件
+        # An explicit weight file was requested
         if not os.path.exists(weights_path):
             if verbose:
-                print(f"⚠️  指定的权重文件不存在: {weights_path}")
+                print(f"[WARN] Weights file not found: {weights_path}")
             return None
 
         try:
             with open(weights_path, 'r') as f:
                 data = json.load(f)
 
-            # 支持两种格式
+            # Two file layouts are supported
             if 'weights' in data:
                 weights = data['weights']
                 method = data.get('method', 'unknown')
                 metrics = data.get('metrics', {})
             elif 'optimized_results' in data:
-                # 找最佳方法
+                # Pick the best-performing method
                 best_result = max(data['optimized_results'],
                                   key=lambda x: x['metrics'].get('roc_auc', 0))
                 weights = best_result['weights']
@@ -137,18 +139,18 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
                 metrics = best_result['metrics']
             else:
                 if verbose:
-                    print(f"⚠️  权重文件格式不正确: {weights_path}")
+                    print(f"[WARN] Unrecognized weights file format: {weights_path}")
                 return None
 
             if verbose:
                 print(f"\n{'=' * 80}")
-                print(f"✅ 已加载优化权重")
+                print(f"[OK] Loaded optimized weights")
                 print(f"{'=' * 80}")
-                print(f"文件: {weights_path}")
-                print(f"方法: {method}")
+                print(f"File: {weights_path}")
+                print(f"Method: {method}")
                 print(f"ROC-AUC: {metrics.get('roc_auc', 0):.4f}")
                 print(f"Score Gap: {metrics.get('score_gap', 0):.4f}")
-                print(f"\n权重配置:")
+                print(f"\nWeight configuration:")
                 for feat, weight in sorted(weights.items(), key=lambda x: -x[1]):
                     print(f"  {feat:25s}: {weight:.4f}")
                 print(f"{'=' * 80}\n")
@@ -157,18 +159,18 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
 
         except Exception as e:
             if verbose:
-                print(f"⚠️  加载权重文件失败: {e}")
+                print(f"[WARN] Failed to load weights file: {e}")
             return None
 
-    # 自动搜索最佳权重
+    # Otherwise, search for the best weights automatically
     if task_name:
-        # 搜索优化结果目录
+        # Candidate locations of optimization results
         patterns = [
             # weights released with this repo (weights/<task>.json), then any newly searched runs
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", f"{task_name}.json"),
             f"bmc_optimization_{task_name}_*/optimization_results.json",
             f"best_weights_{task_name}_*.json",
-            "bmc_optimization_*/optimization_results.json",  # 通用搜索
+            "bmc_optimization_*/optimization_results.json",  # generic fallback
         ]
 
         best_file = None
@@ -181,13 +183,13 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
                     with open(filepath, 'r') as f:
                         data = json.load(f)
 
-                    # 检查是否匹配任务
+                    # Skip files belonging to a different task
                     file_task = data.get('task', 'unknown')
                     if task_name and file_task != task_name:
                         continue
 
                     if 'optimized_results' in data:
-                        # 找最佳ROC-AUC
+                        # Keep the entry with the highest ROC-AUC
                         for result in data['optimized_results']:
                             if 'weights' not in result:
                                 continue
@@ -200,11 +202,11 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
 
         if best_file:
             if verbose:
-                print(f"🔍 自动发现最佳权重: {best_file}")
+                print(f"[INFO] Auto-detected best weights: {best_file}")
             return load_optimized_weights(task_name, best_file, verbose)
 
     if verbose:
-        print(f"ℹ️  未找到优化权重，将使用默认aggressive_scoring策略")
+        print(f"[INFO] No optimized weights found; falling back to the default aggressive_scoring strategy")
 
     return None
 
@@ -219,7 +221,7 @@ def generate_single_sample(
         temperature,
         cfg_scale,
 ):
-    """生成单个样本"""
+    """Generate a single sample."""
     out = generate(
         model,
         input_ids,
@@ -256,38 +258,38 @@ def evaluate_with_bmc_resampling(
         max_attempts=5,
 ):
     """
-    带 BMC-Resampling 的评估函数
+    Evaluation loop with BMC-Resampling.
 
     Args:
-        temperature: 生成温度，>0引入随机性（推荐0.3-0.7）
-        bmc_threshold: BMC分数阈值，超过则停止
-        max_attempts: 最大尝试次数
+        temperature: sampling temperature; values >0 introduce randomness (0.3-0.7 recommended)
+        bmc_threshold: BMC score threshold above which resampling stops
+        max_attempts: maximum number of generation attempts per sample
 
-    ⚠️  重要：temperature必须>0才能让resampling有意义！
-        - temperature=0.0: 完全确定性，每次生成相同答案（无自我纠正）
-        - temperature=0.3-0.5: 适度随机性（推荐）
-        - temperature>0.7: 高随机性，答案多样但可能质量下降
+    Important: temperature must be >0 for resampling to be meaningful.
+        - temperature=0.0: fully deterministic, every attempt yields the same answer (no self-correction)
+        - temperature=0.3-0.5: moderate randomness (recommended)
+        - temperature>0.7: high randomness, more diverse answers but possibly lower quality
     """
     model.eval()
     total_processed = torch.tensor(0, device=model.device)
 
-    # 获取任务配置
+    # Task-specific extractor/validator
     task_config = get_task_config(task_name)
     answer_extractor = task_config["extractor"]
     answer_validator = task_config["validator"]
 
-    # 统计信息
+    # Collected per-sample results
     all_results = []
     device = model.device
 
-    # Resampling 统计
+    # Resampling statistics
     resampling_stats = {
         "total_samples": 0,
         "avg_attempts": [],
         "early_stops": 0,
         "max_attempts_reached": 0,
-        "self_corrections": 0,  # 错误→正确的次数
-        "improvements": 0,  # BMC分数提升的次数
+        "self_corrections": 0,  # number of wrong-to-right transitions
+        "improvements": 0,  # number of samples whose BMC score improved
     }
 
     for batch in tqdm(dataloader, disable=(dist.get_rank() != 0)):
@@ -298,7 +300,7 @@ def evaluate_with_bmc_resampling(
 
         batch_size = len(gt_answers)
 
-        # 🔄 逐样本进行 BMC-Resampling
+        # Run BMC-Resampling sample by sample
         for j in range(batch_size):
             question = questions[j]
             gt_answer = gt_answers[j]
@@ -309,11 +311,11 @@ def evaluate_with_bmc_resampling(
             best_bmc_score = -1.0
             stopped_early = False
 
-            # 🔁 多次尝试生成
+            # Try generating up to max_attempts candidates
             for attempt_idx in range(max_attempts):
                 attempt_start = time.time()
 
-                # 1. 生成候选答案
+                # 1. Generate a candidate answer
                 generated_text = generate_single_sample(
                     model,
                     single_input_ids,
@@ -325,10 +327,10 @@ def evaluate_with_bmc_resampling(
                     cfg_scale,
                 )
 
-                # 2. 提取答案
+                # 2. Extract the answer
                 generated_answer = answer_extractor(generated_text)
 
-                # 3. 验证正确性
+                # 3. Check correctness
                 if task_name in ["sudoku", "countdown"]:
                     is_correct, validation_details = answer_validator(
                         generated_answer, gt_answer, question
@@ -337,7 +339,7 @@ def evaluate_with_bmc_resampling(
                     is_correct = answer_validator(generated_answer, gt_answer)
                     validation_details = {}
 
-                # 4. BMC 评估
+                # 4. BMC evaluation
                 bmc_start = time.time()
                 try:
                     bmc_result = bmc_probe.probe(
@@ -360,7 +362,7 @@ def evaluate_with_bmc_resampling(
                     }
                 except Exception as e:
                     if dist.get_rank() == 0:
-                        print(f"⚠️  BMC evaluation failed: {e}")
+                        print(f"[WARN] BMC evaluation failed: {e}")
                     bmc_score = 0.0
                     bmc_scores = {
                         'consistency_score': 0.0,
@@ -370,7 +372,7 @@ def evaluate_with_bmc_resampling(
                 bmc_time = time.time() - bmc_start
                 attempt_time = time.time() - attempt_start
 
-                # 5. 记录本次尝试
+                # 5. Record this attempt
                 attempt_data = {
                     "attempt_idx": attempt_idx,
                     "generated_text": generated_text,
@@ -387,22 +389,22 @@ def evaluate_with_bmc_resampling(
 
                 attempts_data.append(attempt_data)
 
-                # 6. 更新最佳候选
+                # 6. Update the best candidate
                 if bmc_score > best_bmc_score:
                     best_bmc_score = bmc_score
                     best_candidate = attempt_data
 
-                # 7. 🛑 Early stopping：BMC分数超过阈值
+                # 7. Early stopping once the BMC score clears the threshold
                 if bmc_score >= bmc_threshold:
                     stopped_early = True
                     resampling_stats["early_stops"] += 1
 
                     if dist.get_rank() == 0 and random.random() < 0.1:
                         print(
-                            f"\n✓ Early stop at attempt {attempt_idx + 1}: BMC={bmc_score:.4f} >= threshold={bmc_threshold}")
+                            f"\n[OK] Early stop at attempt {attempt_idx + 1}: BMC={bmc_score:.4f} >= threshold={bmc_threshold}")
                     break
 
-            # 统计信息
+            # Update the statistics
             num_attempts = len(attempts_data)
             resampling_stats["total_samples"] += 1
             resampling_stats["avg_attempts"].append(num_attempts)
@@ -410,7 +412,7 @@ def evaluate_with_bmc_resampling(
             if not stopped_early:
                 resampling_stats["max_attempts_reached"] += 1
 
-            # 自我纠正检测：第一次错误但最终正确
+            # Self-correction: the first attempt was wrong but the final one is right
             if len(attempts_data) > 1:
                 first_correct = attempts_data[0]["is_correct"]
                 final_correct = best_candidate["is_correct"]
@@ -418,14 +420,14 @@ def evaluate_with_bmc_resampling(
                 if not first_correct and final_correct:
                     resampling_stats["self_corrections"] += 1
 
-                # BMC分数提升
+                # The BMC score improved over the first attempt
                 first_bmc = attempts_data[0]["bmc_score"]
                 final_bmc = best_candidate["bmc_score"]
 
                 if final_bmc > first_bmc:
                     resampling_stats["improvements"] += 1
 
-            # 构建结果
+            # Assemble the per-sample record
             result = {
                 "question": question,
                 "prompt_input": prompts[j],
@@ -440,34 +442,34 @@ def evaluate_with_bmc_resampling(
             all_results.append(result)
             total_processed += 1
 
-            # 8. 打印示例
-            if dist.get_rank() == 0 and random.random() < 0.1:  # 10%概率打印
+            # 8. Print an example for roughly 10% of the samples
+            if dist.get_rank() == 0 and random.random() < 0.1:
                 print(f"\n{'=' * 80}")
                 print(f"Question: {question[:150]}...")
                 print(f"Ground truth: {str(gt_answer)[:100]}")
-                print(f"\n🔄 Resampling Process ({num_attempts} attempts):")
+                print(f"\nResampling Process ({num_attempts} attempts):")
                 for att in attempts_data:
-                    status = "✓" if att["is_correct"] else "✗"
+                    status = "[OK]" if att["is_correct"] else "[FAIL]"
                     print(
                         f"  Attempt {att['attempt_idx'] + 1}: {status} | BMC={att['bmc_score']:.4f} | Answer={att['generated_answer']}")
                 print(
-                    f"\n🏆 Best: Attempt {best_candidate['attempt_idx'] + 1} | BMC={best_bmc_score:.4f} | Correct={best_candidate['is_correct']}")
+                    f"\nBest: Attempt {best_candidate['attempt_idx'] + 1} | BMC={best_bmc_score:.4f} | Correct={best_candidate['is_correct']}")
                 print(f"{'=' * 80}\n")
 
-    # 计算最终统计
+    # Compute the final statistics
     final_accuracy = sum(1 for r in all_results if r["final_is_correct"]) / len(all_results) if all_results else 0.0
     avg_attempts = np.mean(resampling_stats["avg_attempts"]) if resampling_stats["avg_attempts"] else 0.0
 
     if dist.get_rank() == 0:
         print(f"\n{'=' * 80}")
-        print(f"📊 BMC-Resampling Results - Rank {dist.get_rank()} ({task_name.upper()}):")
+        print(f"BMC-Resampling Results - Rank {dist.get_rank()} ({task_name.upper()}):")
         print(f"{'=' * 80}")
         print(f"Samples processed: {resampling_stats['total_samples']}")
         print(f"Rank accuracy: {final_accuracy:.2%}")
         print(f"Average attempts: {avg_attempts:.2f}")
         print(
             f"Early stops: {resampling_stats['early_stops']} ({resampling_stats['early_stops'] / resampling_stats['total_samples'] * 100:.1f}%)")
-        print(f"Self-corrections (wrong→right): {resampling_stats['self_corrections']}")
+        print(f"Self-corrections (wrong -> right): {resampling_stats['self_corrections']}")
         print(f"{'=' * 80}\n")
 
     metrics = {
@@ -482,39 +484,39 @@ def evaluate_with_bmc_resampling(
 
 def merge_distributed_results(base_filename, num_ranks, output_dir):
     """
-    🔥 NEW: 合并所有rank的结果
+    Merge the per-rank result files into a single file.
 
     Args:
-        base_filename: 基础文件名（不含rank后缀）
-        num_ranks: rank数量
-        output_dir: 输出目录
+        base_filename: base filename without the rank suffix
+        num_ranks: number of ranks
+        output_dir: output directory
 
     Returns:
-        合并后的文件路径
+        Path to the merged file.
     """
     print(f"\n{'=' * 80}")
-    print("🔗 Merging distributed results...")
+    print("Merging distributed results...")
     print(f"{'=' * 80}")
 
-    # 等待所有rank文件生成
+    # Give every rank time to flush its file
     time.sleep(3)
 
-    # 查找所有rank文件
+    # Collect the per-rank files
     rank_files = []
     for rank in range(num_ranks):
         rank_file = f"{base_filename}_{rank}_results.json"
         if os.path.exists(rank_file):
             rank_files.append(rank_file)
         else:
-            print(f"⚠️  Missing file for rank {rank}: {rank_file}")
+            print(f"[WARN] Missing file for rank {rank}: {rank_file}")
 
     if len(rank_files) == 0:
-        print("❌ No rank files found!")
+        print("[ERROR] No rank files found!")
         return None
 
     print(f"Found {len(rank_files)}/{num_ranks} rank files")
 
-    # 加载并合并所有结果
+    # Load and concatenate every rank's results
     all_results = []
     configs = []
 
@@ -528,15 +530,15 @@ def merge_distributed_results(base_filename, num_ranks, output_dir):
                 if 'config' in data:
                     configs.append(data['config'])
 
-                print(f"  ✓ Loaded {len(results)} samples from {Path(rf).name}")
+                print(f"  [OK] Loaded {len(results)} samples from {Path(rf).name}")
         except Exception as e:
-            print(f"  ⚠️  Error loading {rf}: {e}")
+            print(f"  [WARN] Error loading {rf}: {e}")
 
     if not all_results:
-        print("❌ No results to merge!")
+        print("[ERROR] No results to merge!")
         return None
 
-    # 重新计算完整统计
+    # Recompute the statistics over the merged set
     print(f"\nRecalculating metrics for {len(all_results)} samples...")
 
     final_accuracy = sum(1 for r in all_results if r.get('final_is_correct', False)) / len(all_results)
@@ -548,22 +550,22 @@ def merge_distributed_results(base_filename, num_ranks, output_dir):
     avg_attempts = np.mean([r.get('num_attempts', 0) for r in all_results])
     early_stops = sum(1 for r in all_results if r.get('stopped_early', False))
 
-    # 自我纠正统计
+    # Self-correction statistics
     self_corrections = 0
     bmc_improvements = 0
 
     for r in all_results:
         attempts = r.get('all_attempts', [])
         if len(attempts) > 1:
-            # 自我纠正：第一次错误但最终正确
+            # Self-correction: the first attempt was wrong but the final one is right
             if not attempts[0]['is_correct'] and r['final_is_correct']:
                 self_corrections += 1
 
-            # BMC分数提升
+            # The BMC score improved over the first attempt
             if r['best_candidate']['bmc_score'] > attempts[0]['bmc_score']:
                 bmc_improvements += 1
 
-    # 构建合并后的数据
+    # Assemble the merged payload
     merged_filename = f"{base_filename}_merged.json"
 
     merged_data = {
@@ -594,13 +596,13 @@ def merge_distributed_results(base_filename, num_ranks, output_dir):
         }
     }
 
-    # 保存合并结果
+    # Save the merged results
     with open(merged_filename, 'w') as f:
         json.dump(merged_data, f, indent=2)
 
-    # 打印汇总
+    # Print the summary
     print(f"\n{'=' * 80}")
-    print(f"✅ Merged Results Summary:")
+    print(f"Merged Results Summary:")
     print(f"{'=' * 80}")
     print(f"Total samples: {len(all_results)}")
     print(f"Final accuracy: {final_accuracy:.2%}")
@@ -623,7 +625,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, default="GSAI-ML/LLaDA-8B-Instruct")
-    parser.add_argument("--batch_size", type=int, default=1, help="建议设为1，因为逐样本处理")
+    parser.add_argument("--batch_size", type=int, default=1, help="Use 1: resampling processes one sample at a time")
     parser.add_argument(
         "--dataset",
         type=str,
@@ -637,44 +639,44 @@ if __name__ == "__main__":
     parser.add_argument("--diffusion_steps", type=int, default=64)
     parser.add_argument("--output_dir", type=str, default="results_bmc_resampling/")
 
-    # BMC 参数
+    # BMC parameters
     parser.add_argument("--t_probe", type=float, default=0.9)
     parser.add_argument("--num_reverse_steps", type=int, default=5)
     parser.add_argument("--semantic_model_path", type=str, required=True)
 
-    # BMC-Resampling 参数
+    # BMC-Resampling parameters
     parser.add_argument("--temperature", type=float, default=0.5,
-                        help="生成温度（0=确定性，>0引入随机性）。⚠️ 必须>0才能让resampling有效！推荐0.3-0.7")
+                        help="Sampling temperature (0=deterministic, >0 introduces randomness). Must be >0 for resampling to be effective; 0.3-0.7 recommended")
     parser.add_argument("--bmc_threshold", type=float, default=0.75,
-                        help="BMC分数阈值，超过则停止")
+                        help="BMC score threshold above which resampling stops")
     parser.add_argument("--max_attempts", type=int, default=5,
-                        help="最大尝试次数")
+                        help="Maximum number of generation attempts per sample")
 
-    # 🔥 NEW: 优化权重支持
+    # Optimized-weight support
     parser.add_argument("--optimized_weights_path", type=str, default=None,
-                        help="优化权重文件路径（可选，自动搜索）")
+                        help="Path to an optimized weights file (optional; searched automatically)")
     parser.add_argument("--force_aggressive", action="store_true",
-                        help="强制使用aggressive_scoring，忽略优化权重")
+                        help="Force aggressive_scoring and ignore optimized weights")
     parser.add_argument("--adaptive_t", action="store_true",
-                        help="使用自适应 t_probe")
+                        help="Use an adaptive t_probe")
     parser.add_argument("--num_samples", type=int, default=1,
-                        help="BMC 采样次数（>=1，用于减少随机性）")
+                        help="Number of BMC samples (>=1; higher values reduce variance)")
 
-    # 数据集路径
+    # Dataset paths
     parser.add_argument("--sudoku_csv_path", type=str, default=None)
     parser.add_argument("--countdown_jsonl_path", type=str, default=None)
 
     args = parser.parse_args()
     args.diffusion_steps = args.gen_length // 2
 
-    # 验证
+    # Validate the arguments
     if not os.path.exists(args.semantic_model_path):
         if dist.get_rank() == 0:
-            print(f"❌ ERROR: semantic_model_path not found: {args.semantic_model_path}")
+            print(f"[ERROR] semantic_model_path not found: {args.semantic_model_path}")
         cleanup_ddp()
         exit(1)
 
-    # 🔥 NEW: 加载优化权重
+    # Load optimized weights when available
     optimized_weights = None
     if not args.force_aggressive:
         if dist.get_rank() == 0:
@@ -684,7 +686,7 @@ if __name__ == "__main__":
                 verbose=True
             )
 
-        # 广播权重到所有进程
+        # Broadcast the weights to every process
         if dist.get_world_size() > 1:
             if optimized_weights is not None:
                 weights_list = [optimized_weights]
@@ -694,7 +696,7 @@ if __name__ == "__main__":
             dist.broadcast_object_list(weights_list, src=0)
             optimized_weights = weights_list[0]
 
-    # 加载模型
+    # Load the model
     if dist.get_rank() == 0:
         print(f"\n{'=' * 80}")
         print("Loading LLaDA model...")
@@ -722,7 +724,7 @@ if __name__ == "__main__":
             for param in model.parameters():
                 dist.broadcast(param.data, src=0)
 
-    # 初始化 BMC V2
+    # Initialize BMC V2
     if dist.get_rank() == 0:
         print("\n" + "=" * 80)
         print("Initializing BMC V2 for Resampling...")
@@ -733,7 +735,7 @@ if __name__ == "__main__":
         print(f"Num samples: {args.num_samples}")
 
         if optimized_weights:
-            print(f"✅ Using OPTIMIZED WEIGHTS")
+            print(f"Using OPTIMIZED WEIGHTS")
         elif args.force_aggressive:
             print(f"Using aggressive scoring (forced)")
         else:
@@ -741,7 +743,7 @@ if __name__ == "__main__":
 
         print("=" * 80)
 
-    # 🔥 获取任务配置用于BMC
+    # Task configuration consumed by BMC
     task_config = get_task_config(args.dataset)
     
     bmc_probe = BMCEstimator(
@@ -752,22 +754,22 @@ if __name__ == "__main__":
         adaptive_t=args.adaptive_t,
         num_samples=args.num_samples,
         aggressive_scoring=(not optimized_weights and not args.force_aggressive),
-        optimized_weights=optimized_weights,  # 🔥 传入优化权重
-        task_name=args.dataset,  # 🔥 传入任务类型
-        task_config=task_config  # 🔥 传入任务配置
+        optimized_weights=optimized_weights,
+        task_name=args.dataset,
+        task_config=task_config
     )
 
     if dist.get_rank() == 0:
-        print(f"✓ BMC V2 initialized")
+        print(f"[OK] BMC V2 initialized")
         print("=" * 80 + "\n")
 
-    # 准备数据集
+    # Prepare the dataset
     num_evals = {"gsm8k": -1, "math": -1, "countdown": 256, "sudoku": 256}
 
     dataset_kwargs = {
         "tokenizer": tokenizer,
         "subsample": num_evals[args.dataset],
-        "num_examples": 0,  # Resampling不需要few-shot
+        "num_examples": 0,  # resampling does not use few-shot examples
         "add_reasoning": True,
     }
 
@@ -785,22 +787,22 @@ if __name__ == "__main__":
         collate_fn=dataset.collate_fn,
     )
 
-    # 构建输出文件名
+    # Build the output filename
     model_name = "instruct" if "Instruct" in args.model_path else "base"
 
-    # 🔥 添加优化权重标记
+    # Mark whether optimized weights were used
     weight_suffix = "_optimized" if optimized_weights else "_aggressive"
     if args.adaptive_t:
         weight_suffix += "_adaptive"
     if args.num_samples > 1:
         weight_suffix += f"_ns{args.num_samples}"
 
-    # 基础文件名（不含rank后缀）
+    # Base filename without the rank suffix
     base_filename = (f"{args.output_dir}/{args.dataset}_{model_name}_"
                      f"temp{args.temperature}_threshold{args.bmc_threshold}_max{args.max_attempts}"
                      f"{weight_suffix}")
 
-    # 每个rank的文件名
+    # Per-rank filename
     filename = f"{base_filename}_{dist.get_rank()}_results.json"
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -809,7 +811,7 @@ if __name__ == "__main__":
         print(f"Base filename: {base_filename}")
         print(f"Rank {dist.get_rank()} saving to: {filename}")
 
-    # 运行评估
+    # Run the evaluation
     metrics = evaluate_with_bmc_resampling(
         model,
         tokenizer,
@@ -826,7 +828,7 @@ if __name__ == "__main__":
         max_attempts=args.max_attempts,
     )
 
-    # 保存每个rank的结果
+    # Save this rank's results
     with open(filename, "w") as f:
         json.dump(
             {
@@ -849,7 +851,7 @@ if __name__ == "__main__":
                     "num_reverse_steps": args.num_reverse_steps,
                     "adaptive_t": args.adaptive_t,
                     "num_samples": args.num_samples,
-                    # 🔥 记录优化权重信息
+                    # Record which weights were used
                     "using_optimized_weights": optimized_weights is not None,
                     "weights_path": args.optimized_weights_path,
                     "force_aggressive": args.force_aggressive,
@@ -860,14 +862,13 @@ if __name__ == "__main__":
         )
 
     if dist.get_rank() == 0:
-        print(f"\n✓ Rank {dist.get_rank()} results saved to: {filename}")
+        print(f"\n[OK] Rank {dist.get_rank()} results saved to: {filename}")
 
-    # 🔥 NEW: 同步所有rank，然后由rank 0合并结果
+    # Synchronize all ranks, then let rank 0 merge the results
     if dist.get_world_size() > 1:
-        dist.barrier()  # 等待所有rank完成
+        dist.barrier()
 
     if dist.get_rank() == 0:
-        # Rank 0 执行合并
         merged_file = merge_distributed_results(
             base_filename=base_filename,
             num_ranks=dist.get_world_size(),
@@ -875,7 +876,7 @@ if __name__ == "__main__":
         )
 
         if merged_file:
-            print(f"\n🎉 All done! Check the merged results at:")
+            print(f"\nAll done! Check the merged results at:")
             print(f"   {merged_file}")
 
     cleanup_ddp()

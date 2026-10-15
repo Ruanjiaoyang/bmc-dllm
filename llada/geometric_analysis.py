@@ -1,6 +1,6 @@
 """
-🔬 BMC几何分析脚本
-基于已生成的BMC结果进行深度几何分析
+BMC geometric analysis script.
+Performs an in-depth geometric analysis of previously generated BMC results.
 """
 import json
 import glob
@@ -19,7 +19,7 @@ import argparse
 
 
 class GeometricAnalyzer:
-    """BMC几何分析器"""
+    """Geometric analyzer for BMC results."""
     
     def __init__(self, result_dir: str, task_name: str):
         self.result_dir = Path(result_dir)
@@ -35,7 +35,7 @@ class GeometricAnalyzer:
         
     def load_data(self) -> Tuple[np.ndarray, np.ndarray, List[Dict]]:
         """
-        加载数据并提取6维feature vectors
+        Load the results and extract the 6D feature vectors.
         
         Returns:
             features: [N, 6] array
@@ -86,7 +86,7 @@ class GeometricAnalyzer:
         features = np.array(all_features)
         labels = np.array(all_labels)
         
-        print(f"✓ Loaded {len(features)} valid samples")
+        print(f"[OK] Loaded {len(features)} valid samples")
         print(f"  Correct: {labels.sum()} ({labels.mean()*100:.1f}%)")
         print(f"  Incorrect: {len(labels)-labels.sum()}")
         print(f"{'='*60}\n")
@@ -95,14 +95,14 @@ class GeometricAnalyzer:
     
     def analyze_manifold_density(self, features, labels, output_dir):
         """
-        🔥 核心分析1: Manifold Density Hypothesis
-        验证correct samples是否在high-density区域
+        Core analysis 1: Manifold Density Hypothesis.
+        Test whether correct samples lie in high-density regions.
         """
         print(f"\n{'='*60}")
-        print("🔬 Analysis 1: Manifold Density Hypothesis")
+        print("Analysis 1: Manifold Density Hypothesis")
         print(f"{'='*60}\n")
         
-        # 1. 计算density (在6D原始空间)
+        # 1. Estimate density in the original 6D space
         kde = KernelDensity(bandwidth=0.15, kernel='gaussian')
         kde.fit(features)
         log_density = kde.score_samples(features)
@@ -115,28 +115,28 @@ class GeometricAnalyzer:
         stat, p_value = mannwhitneyu(density_correct, density_incorrect, 
                                       alternative='greater')
         
-        print(f"📊 Density Statistics:")
+        print(f"Density Statistics:")
         print(f"  Correct samples:")
         print(f"    Mean: {density_correct.mean():.4f}")
         print(f"    Std:  {density_correct.std():.4f}")
         print(f"  Incorrect samples:")
         print(f"    Mean: {density_incorrect.mean():.4f}")
         print(f"    Std:  {density_incorrect.std():.4f}")
-        print(f"\n  📈 Density Ratio: {density_correct.mean() / density_incorrect.mean():.2f}x")
-        print(f"  🧪 Mann-Whitney U test: p = {p_value:.2e}")
+        print(f"\n  Density Ratio: {density_correct.mean() / density_incorrect.mean():.2f}x")
+        print(f"  Mann-Whitney U test: p = {p_value:.2e}")
         
         if p_value < 0.001:
-            print(f"  ✅ HIGHLY SIGNIFICANT! Correct samples have higher density")
+            print(f"  [OK] HIGHLY SIGNIFICANT! Correct samples have higher density")
         elif p_value < 0.05:
-            print(f"  ⚠️  Marginally significant")
+            print(f"  [WARN] Marginally significant")
         else:
-            print(f"  ❌ Not significant")
+            print(f"  [WARN] Not significant")
         
         # 3. PCA projection for visualization
         pca = PCA(n_components=2)
         coords_2d = pca.fit_transform(features)
         
-        print(f"\n📐 PCA Info:")
+        print(f"\nPCA Info:")
         print(f"  Explained variance: {pca.explained_variance_ratio_.sum()*100:.1f}%")
         print(f"    PC1: {pca.explained_variance_ratio_[0]*100:.1f}%")
         print(f"    PC2: {pca.explained_variance_ratio_[1]*100:.1f}%")
@@ -210,7 +210,7 @@ class GeometricAnalyzer:
                    dpi=300, bbox_inches='tight')
         plt.savefig(output_dir / f'{self.task_name}_manifold_density.png', 
                    dpi=150, bbox_inches='tight')
-        print(f"\n✓ Saved: {output_dir / f'{self.task_name}_manifold_density.pdf'}")
+        print(f"\n[OK] Saved: {output_dir / f'{self.task_name}_manifold_density.pdf'}")
         plt.close()
         
         return {
@@ -224,11 +224,11 @@ class GeometricAnalyzer:
     
     def analyze_feature_space(self, features, labels, output_dir):
         """
-        🔥 核心分析2: Feature Space Geometric Structure
-        分析每个feature的discriminative power
+        Core analysis 2: Feature Space Geometric Structure.
+        Quantify the discriminative power of each feature.
         """
         print(f"\n{'='*60}")
-        print("🔬 Analysis 2: Feature Space Structure")
+        print("Analysis 2: Feature Space Structure")
         print(f"{'='*60}\n")
         
         fig, axes = plt.subplots(2, 3, figsize=(18, 10))
@@ -249,7 +249,7 @@ class GeometricAnalyzer:
             pooled_std = np.sqrt((correct_vals.std()**2 + incorrect_vals.std()**2) / 2)
             cohens_d = mean_diff / pooled_std if pooled_std > 0 else 0
             
-            print(f"📊 {feat_name}:")
+            print(f"{feat_name}:")
             print(f"  Correct:   μ={correct_vals.mean():.3f}, σ={correct_vals.std():.3f}")
             print(f"  Incorrect: μ={incorrect_vals.mean():.3f}, σ={incorrect_vals.std():.3f}")
             print(f"  Gap: {mean_diff:.3f}")
@@ -290,7 +290,7 @@ class GeometricAnalyzer:
                    dpi=300, bbox_inches='tight')
         plt.savefig(output_dir / f'{self.task_name}_feature_distributions.png', 
                    dpi=150, bbox_inches='tight')
-        print(f"✓ Saved: {output_dir / f'{self.task_name}_feature_distributions.pdf'}")
+        print(f"[OK] Saved: {output_dir / f'{self.task_name}_feature_distributions.pdf'}")
         plt.close()
         
         # Feature correlation heatmap
@@ -299,7 +299,7 @@ class GeometricAnalyzer:
         return feature_stats
     
     def _plot_feature_correlations(self, features, labels, output_dir):
-        """绘制feature correlation heatmap"""
+        """Plot the feature correlation heatmaps."""
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
         
         # Correct samples
@@ -323,16 +323,16 @@ class GeometricAnalyzer:
         plt.tight_layout()
         plt.savefig(output_dir / f'{self.task_name}_feature_correlations.pdf', 
                    dpi=300, bbox_inches='tight')
-        print(f"✓ Saved: {output_dir / f'{self.task_name}_feature_correlations.pdf'}")
+        print(f"[OK] Saved: {output_dir / f'{self.task_name}_feature_correlations.pdf'}")
         plt.close()
     
     def analyze_intrinsic_dimensionality(self, features, labels, output_dir):
         """
-        🔥 核心分析3: Intrinsic Dimensionality
-        估计manifold的真实维度
+        Core analysis 3: Intrinsic Dimensionality.
+        Estimate the true dimensionality of the manifold.
         """
         print(f"\n{'='*60}")
-        print("🔬 Analysis 3: Intrinsic Dimensionality")
+        print("Analysis 3: Intrinsic Dimensionality")
         print(f"{'='*60}\n")
         
         # PCA analysis
@@ -344,7 +344,7 @@ class GeometricAnalyzer:
         n_components_95 = np.argmax(cumsum >= 0.95) + 1
         n_components_99 = np.argmax(cumsum >= 0.99) + 1
         
-        print(f"📐 PCA Dimensionality Estimates:")
+        print(f"PCA Dimensionality Estimates:")
         print(f"  95% variance: {n_components_95} dimensions")
         print(f"  99% variance: {n_components_99} dimensions")
         print(f"  Full 6D variance: {cumsum[-1]*100:.1f}%")
@@ -379,7 +379,7 @@ class GeometricAnalyzer:
         plt.tight_layout()
         plt.savefig(output_dir / f'{self.task_name}_intrinsic_dim.pdf', 
                    dpi=300, bbox_inches='tight')
-        print(f"✓ Saved: {output_dir / f'{self.task_name}_intrinsic_dim.pdf'}")
+        print(f"[OK] Saved: {output_dir / f'{self.task_name}_intrinsic_dim.pdf'}")
         plt.close()
         
         # Feature loadings on first 3 PCs
@@ -419,11 +419,11 @@ class GeometricAnalyzer:
         plt.tight_layout()
         plt.savefig(output_dir / f'{self.task_name}_pca_loadings.pdf', 
                    dpi=300, bbox_inches='tight')
-        print(f"✓ Saved: {output_dir / f'{self.task_name}_pca_loadings.pdf'}")
+        print(f"[OK] Saved: {output_dir / f'{self.task_name}_pca_loadings.pdf'}")
         plt.close()
     
     def run_full_analysis(self, output_dir: Path):
-        """运行完整分析pipeline"""
+        """Run the full analysis pipeline."""
         print(f"\n{'#'*80}")
         print(f"# GEOMETRIC ANALYSIS: {self.task_name.upper()}")
         print(f"{'#'*80}\n")
@@ -432,7 +432,7 @@ class GeometricAnalyzer:
         features, labels, raw_data = self.load_data()
         
         if len(features) == 0:
-            print(f"❌ No valid data found for {self.task_name}")
+            print(f"[ERROR] No valid data found for {self.task_name}")
             return None
         
         # Run analyses
@@ -462,7 +462,7 @@ class GeometricAnalyzer:
             json.dump(results, f, indent=2)
         
         print(f"\n{'='*60}")
-        print(f"✅ Analysis Complete for {self.task_name.upper()}")
+        print(f"Analysis Complete for {self.task_name.upper()}")
         print(f"{'='*60}\n")
         
         return results
@@ -470,8 +470,8 @@ class GeometricAnalyzer:
 
 def cross_task_comparison(tasks: List[str], result_dir: str, output_dir: Path):
     """
-    🔥 跨任务对比分析
-    比较不同任务的geometric properties
+    Cross-task comparison.
+    Compare the geometric properties across different tasks.
     """
     print(f"\n{'#'*80}")
     print(f"# CROSS-TASK GEOMETRIC COMPARISON")
@@ -489,10 +489,10 @@ def cross_task_comparison(tasks: List[str], result_dir: str, output_dir: Path):
                     'labels': labels
                 }
         except Exception as e:
-            print(f"⚠️  Failed to load {task}: {e}")
+            print(f"[WARN] Failed to load {task}: {e}")
     
     if len(all_results) < 2:
-        print("❌ Need at least 2 tasks for comparison")
+        print("[ERROR] Need at least 2 tasks for comparison")
         return
     
     # 1. Compare density distributions
@@ -614,7 +614,7 @@ def cross_task_comparison(tasks: List[str], result_dir: str, output_dir: Path):
     plt.tight_layout()
     plt.savefig(output_dir / 'cross_task_comparison.pdf', dpi=300, bbox_inches='tight')
     plt.savefig(output_dir / 'cross_task_comparison.png', dpi=150, bbox_inches='tight')
-    print(f"✓ Saved: {output_dir / 'cross_task_comparison.pdf'}")
+    print(f"[OK] Saved: {output_dir / 'cross_task_comparison.pdf'}")
     plt.close()
 
 
@@ -637,7 +637,7 @@ if __name__ == "__main__":
     output_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"\n{'='*80}")
-    print(f"🔬 BMC GEOMETRIC ANALYSIS")
+    print(f"BMC GEOMETRIC ANALYSIS")
     print(f"{'='*80}")
     print(f"Result directory: {args.result_dir}")
     print(f"Output directory: {output_dir.absolute()}")
@@ -650,7 +650,7 @@ if __name__ == "__main__":
         try:
             analyzer.run_full_analysis(output_dir)
         except Exception as e:
-            print(f"❌ Error analyzing {task}: {e}")
+            print(f"[ERROR] Error analyzing {task}: {e}")
             import traceback
             traceback.print_exc()
     
@@ -658,12 +658,12 @@ if __name__ == "__main__":
     try:
         cross_task_comparison(args.tasks, args.result_dir, output_dir)
     except Exception as e:
-        print(f"❌ Error in cross-task comparison: {e}")
+        print(f"[ERROR] Error in cross-task comparison: {e}")
         import traceback
         traceback.print_exc()
     
     print(f"\n{'='*80}")
-    print(f"✅ ANALYSIS COMPLETE!")
+    print(f"ANALYSIS COMPLETE!")
     print(f"{'='*80}")
     print(f"All outputs saved to: {output_dir.absolute()}")
     print(f"\nGenerated files:")

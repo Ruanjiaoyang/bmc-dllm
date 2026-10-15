@@ -1,14 +1,14 @@
 """
-Coding任务的BMC评估脚本
-对比 Model Confidence, Self-Consistency, Self-Evaluation, BMC
-专门适配 HumanEval 和 MBPP 任务
+BMC evaluation script for coding tasks.
+Compares Model Confidence, Self-Consistency, Self-Evaluation and BMC.
+Specifically adapted to the HumanEval and MBPP tasks.
 
-关键设计：
-1. Coding任务的答案不再是单一数值，而是完整的函数代码
-2. number_retention 替换为 code_structure_preservation
-3. 新增 AST validity 指标
-4. 新增 execution_compatibility 指标（是否可执行）
-5. 支持生成时使用/不使用 reasoning 结构
+Key design points:
+1. The answer of a coding task is a complete function body, not a single number
+2. number_retention is replaced by code_structure_preservation
+3. Adds an AST validity metric
+4. Adds an execution_compatibility metric (whether the code runs)
+5. Supports generation with or without an explicit reasoning structure
 """
 import argparse
 import json
@@ -33,7 +33,7 @@ from transformers import AutoTokenizer, AutoModel
 
 
 def make_serializable(obj: Any) -> Any:
-    """递归将 numpy/Python 特殊类型转为 JSON 可序列化的原生类型"""
+    """Recursively convert numpy/Python special types into JSON-serializable ones."""
     if isinstance(obj, dict):
         return {k: make_serializable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
@@ -55,7 +55,7 @@ project_root = os.path.dirname(current_dir)
 sys.path.insert(0, current_dir)
 sys.path.insert(0, project_root)
 
-# 注意：lm_eval 依赖链（sqlitedict 等）通过延迟导入加载，避免顶层 import 失败
+# Note: the lm_eval dependency chain (sqlitedict etc.) is imported lazily, so that a missing dependency cannot break the top-level import
 
 
 def init_seed(seed):
@@ -107,15 +107,15 @@ class CustomDistributedSampler(DistributedSampler):
 
 
 # ============================================================================
-# Coding 任务专用 Dataset
+# Dataset classes specific to the coding tasks
 # ============================================================================
 
 class HumanEvalCodingDataset(Dataset):
     """
-    HumanEval 数据集
-    支持两种生成模式：
-    1. DIRECT_CODE: 直接生成代码（无 reasoning 标签）
-    2. WITH_REASONING: 生成 reasoning + 代码（如 "Here's my approach:\n..."）
+    HumanEval dataset.
+    Supports two generation modes:
+    1. DIRECT_CODE: generate code directly (no reasoning markup)
+    2. WITH_REASONING: generate reasoning + code (e.g. "Here's my approach:\n...")
     """
 
     MODES = ["direct_code", "with_reasoning"]
@@ -147,11 +147,11 @@ class HumanEvalCodingDataset(Dataset):
         return len(self.data)
 
     def _build_prompt(self, item) -> str:
-        """根据 mode 构建 prompt"""
+        """Build the prompt according to the selected mode."""
         prompt_text = item["prompt"]
 
         if self.mode == "direct_code":
-            # 直接生成代码模式：简洁指令
+            # Direct code mode: a short, plain instruction
             if self.system_prompt:
                 messages = [
                     {"role": "user", "content": f"{self.system_prompt}\n\nComplete the following Python function:\n\n```python\n{prompt_text}\n```"}
@@ -162,7 +162,7 @@ class HumanEvalCodingDataset(Dataset):
                 ]
 
         elif self.mode == "with_reasoning":
-            # 带 reasoning 模式：先分析后写代码
+            # Reasoning mode: explain the approach first, then write the code
             if self.system_prompt:
                 messages = [
                     {"role": "user", "content": f"{self.system_prompt}\n\nComplete the following Python function. First explain your approach, then provide the implementation:\n\n```python\n{prompt_text}\n```"}
@@ -225,8 +225,8 @@ class HumanEvalCodingDataset(Dataset):
 
 class MBPPCodingDataset(Dataset):
     """
-    MBPP 数据集
-    支持两种生成模式
+    MBPP dataset.
+    Supports the same two generation modes.
     """
 
     MODES = ["direct_code", "with_reasoning"]
@@ -333,20 +333,20 @@ class MBPPCodingDataset(Dataset):
 
 
 # ============================================================================
-# Coding 专用指标提取和验证
+# Coding-specific metric extraction and validation
 # ============================================================================
 
 class CodeMetricsExtractor:
-    """从生成的文本中提取代码相关的多种指标"""
+    """Extract various code-related metrics from the generated text."""
 
     @staticmethod
     def extract_code(text: str) -> Optional[str]:
-        """从文本中提取代码（优先级：answer标签 > code block > raw code）"""
+        """Extract code from text (priority: answer tag > code block > raw code)."""
         if not text:
             return None
         text = str(text)
 
-        # 优先级1: <answer> 标签
+        # Priority 1: <answer> tag
         m = re.search(r'<answer>\s*(.*?)\s*</answer>', text, re.DOTALL | re.IGNORECASE)
         if m:
             code = m.group(1).strip()
@@ -359,17 +359,17 @@ class CodeMetricsExtractor:
             if 'def ' in code or 'import ' in code:
                 return code
 
-        # 优先级2: ```python 代码块
+        # Priority 2: ```python code block
         block = re.search(r'```python\s*\n?(.*?)```', text, re.DOTALL)
         if block:
             return block.group(1).strip()
 
-        # 优先级3: 任意 ``` 代码块
+        # Priority 3: any ``` code block
         block = re.search(r'```\s*\n?(.*?)```', text, re.DOTALL)
         if block:
             return block.group(1).strip()
 
-        # 优先级4: 看起来像代码的文本
+        # Priority 4: text that looks like code
         if 'def ' in text or 'import ' in text:
             m = re.search(r'(def \w+.*)', text, re.DOTALL)
             if m:
@@ -379,7 +379,7 @@ class CodeMetricsExtractor:
 
     @staticmethod
     def extract_function_signature(text: str) -> Optional[str]:
-        """提取函数签名（用于检查结构保留）"""
+        """Extract the function signature (used to check structure preservation)."""
         m = re.search(r'def\s+(\w+)\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*:', text)
         if m:
             return m.group(0)
@@ -387,7 +387,7 @@ class CodeMetricsExtractor:
 
     @staticmethod
     def check_ast_validity(code: str) -> bool:
-        """检查代码是否可被 AST 解析"""
+        """Check whether the code can be parsed by the AST module."""
         if not code:
             return False
         try:
@@ -400,8 +400,8 @@ class CodeMetricsExtractor:
     @staticmethod
     def compute_ast_similarity(code1: str, code2: str) -> float:
         """
-        比较两段代码的 AST 相似度（忽略空格、注释、函数名重命名）
-        返回 [0, 1] 的相似度
+        Compare the AST similarity of two code snippets (ignoring whitespace,
+        comments and function renaming). Returns a similarity in [0, 1].
         """
         if not code1 or not code2:
             return 0.0
@@ -410,14 +410,14 @@ class CodeMetricsExtractor:
             tree1 = ast.parse(code1)
             tree2 = ast.parse(code2)
 
-            # 比较 AST 结构（简化版：比较 AST 节点数量和类型的分布）
+            # Compare AST structure (simplified: compare node count and type distribution)
             nodes1 = [type(n).__name__ for n in ast.walk(tree1)]
             nodes2 = [type(n).__name__ for n in ast.walk(tree2)]
 
             if not nodes1 or not nodes2:
                 return 0.0
 
-            # 计算 Jaccard 相似度
+            # Compute the Jaccard similarity
             set1 = set(nodes1)
             set2 = set(nodes2)
             intersection = len(set1 & set2)
@@ -429,14 +429,14 @@ class CodeMetricsExtractor:
 
     @staticmethod
     def count_valid_lines(code: str) -> int:
-        """计算代码中非空行数"""
+        """Count the non-empty lines in the code."""
         if not code:
             return 0
         return sum(1 for line in code.splitlines() if line.strip())
 
     @staticmethod
     def extract_imports(code: str) -> set:
-        """提取代码中的 import 语句"""
+        """Extract the import statements from the code."""
         if not code:
             return set()
         imports = set()
@@ -448,7 +448,7 @@ class CodeMetricsExtractor:
 
     @staticmethod
     def has_function_definition(code: str, func_name: str = None) -> bool:
-        """检查代码是否包含函数定义"""
+        """Check whether the code contains a function definition."""
         if not code:
             return False
         if func_name:
@@ -457,7 +457,7 @@ class CodeMetricsExtractor:
 
 
 class CodeMetricsValidator:
-    """Coding 任务专用的验证器（与 BMC 评分配合）"""
+    """Validator for coding tasks (used together with the BMC scorer)."""
 
     @staticmethod
     def validate_code_execution(
@@ -466,8 +466,8 @@ class CodeMetricsValidator:
         task_name: str = "humaneval"
     ) -> tuple[bool, dict]:
         """
-        在沙箱中执行代码并验证测试用例通过率
-        这是最可靠的验证方式（与 pass@k 语义一致）
+        Run the code in a sandbox and check the test-case pass rate.
+        This is the most reliable form of validation (same semantics as pass@k).
         """
         if not generated_code or not isinstance(generated_code, str):
             return False, {"test_passed": False, "error": "empty or invalid code"}
@@ -482,7 +482,7 @@ class CodeMetricsValidator:
             elif task_name == "mbpp":
                 return _val_mbpp(generated_code, ground_truth)
             else:
-                # 兜底：检查 AST 有效性
+                # Fallback: check AST validity only
                 is_valid = CodeMetricsExtractor.check_ast_validity(generated_code)
                 return is_valid, {"test_passed": is_valid, "method": "ast_check"}
         except Exception as e:
@@ -495,30 +495,30 @@ class CodeMetricsValidator:
         entry_point: str = None
     ) -> float:
         """
-        计算两段代码的结构匹配度
-        - 函数签名是否相同
-        - AST 结构是否相似
-        - 关键语句是否保留
+        Compute the structural match between two code snippets:
+        - whether the function signatures are identical
+        - whether the AST structures are similar
+        - whether the key statements are preserved
 
-        返回 [0, 1]
+        Returns a value in [0, 1].
         """
         if not code1 or not code2:
             return 0.0
 
         scores = []
 
-        # 1. 函数签名匹配
+        # 1. Function signature match
         sig1 = CodeMetricsExtractor.extract_function_signature(code1)
         sig2 = CodeMetricsExtractor.extract_function_signature(code2)
         if sig1 and sig2:
             sig_match = 1.0 if sig1 == sig2 else 0.0
             scores.append(sig_match)
 
-        # 2. AST 结构相似度
+        # 2. AST structural similarity
         ast_sim = CodeMetricsExtractor.compute_ast_similarity(code1, code2)
         scores.append(ast_sim)
 
-        # 3. 有效代码行数比例（不要求完全相同，但比例不能差太多）
+        # 3. Ratio of valid code lines (need not match exactly, but should be close)
         lines1 = CodeMetricsExtractor.count_valid_lines(code1)
         lines2 = CodeMetricsExtractor.count_valid_lines(code2)
         if lines1 > 0 and lines2 > 0:
@@ -533,7 +533,7 @@ class CodeMetricsValidator:
 
 
 # ============================================================================
-# BMC Coding 专用评分器
+# BMC scorer for coding tasks
 # ============================================================================
 
 def score_code_consistency(
@@ -547,38 +547,38 @@ def score_code_consistency(
     scoring_version: str = "v2",
 ) -> dict:
     """
-    Coding 任务的 BMC 评分函数 (v2 - 优化版)
+    BMC scoring function for coding tasks (v2, tuned version).
 
-    替换 math 任务的指标映射：
-    - number_retention → ast_validity_recon（重构代码的 AST 有效性）
-    - final_answer_match → code_execution_match（执行结果一致性）
-    - token_accuracy → structural_match（代码结构匹配）
-    - char_similarity → 代码文本相似度
+    Metric mapping replacing the one used for math tasks:
+    - number_retention -> ast_validity_recon (AST validity of reconstructed code)
+    - final_answer_match -> code_execution_match (agreement of execution results)
+    - token_accuracy -> structural_match (code structure match)
+    - char_similarity -> textual similarity of the code
 
-    新增 coding 专用指标：
-    - ast_validity_orig：原始代码的 AST 有效性
-    - ast_validity_recon：重构代码的 AST 有效性
-    - code_execution_match：执行结果一致性
-    - function_signature_match：函数签名匹配
-    - orig_exec_score：原始代码直接执行得分（直接衡量质量）
-    - divergence_penalty：重构偏离惩罚（衡量语义偏离）
-    - orig_exec_pass_rate：原始代码是否通过测试（二值）
+    Coding-specific metrics added here:
+    - ast_validity_orig: AST validity of the original code
+    - ast_validity_recon: AST validity of the reconstructed code
+    - code_execution_match: agreement of the execution results
+    - function_signature_match: function signature match
+    - orig_exec_score: execution score of the original code (direct quality signal)
+    - divergence_penalty: reconstruction divergence penalty (semantic drift)
+    - orig_exec_pass_rate: whether the original code passes its tests (binary)
 
     scoring_version:
-    - "v1": 原有激进评分策略
-    - "v2": 新优化评分策略（quality_dim * consistency_dim）
+    - "v1": the original aggressive scoring strategy
+    - "v2": the new tuned strategy (quality_dim * consistency_dim)
     """
 
-    # 提取代码
+    # Extract the code
     if original_code is None:
         original_code = CodeMetricsExtractor.extract_code(original_text)
     if reconstructed_code is None:
         reconstructed_code = CodeMetricsExtractor.extract_code(reconstructed_text)
 
-    # === 基础指标 ===
-    # 1. Token-level accuracy（代码 token 级别）
+    # === Basic metrics ===
+    # 1. Token-level accuracy (over code tokens)
     if original_code and reconstructed_code:
-        # 简单的 token 序列相似度
+        # Simple token-sequence similarity
         orig_tokens = original_code.split()
         recon_tokens = reconstructed_code.split()
         if orig_tokens and recon_tokens:
@@ -596,24 +596,24 @@ def score_code_consistency(
     else:
         char_sim = 0.0
 
-    # 3. AST 有效性
+    # 3. AST validity
     ast_validity_orig = 1.0 if CodeMetricsExtractor.check_ast_validity(original_code or original_text) else 0.0
     ast_validity_recon = 1.0 if CodeMetricsExtractor.check_ast_validity(reconstructed_code or reconstructed_text) else 0.0
 
-    # 4. 函数签名匹配
+    # 4. Function signature match
     sig_orig = CodeMetricsExtractor.extract_function_signature(original_code or original_text or "")
     sig_recon = CodeMetricsExtractor.extract_function_signature(reconstructed_code or reconstructed_text or "")
     sig_match = 1.0 if sig_orig and sig_recon and sig_orig == sig_recon else 0.0
 
-    # 5. 结构匹配
+    # 5. Structural match
     struct_match = CodeMetricsValidator.compute_structural_match(
         original_code or "", reconstructed_code or ""
     )
 
-    # 6. 执行结果一致性 + 原始代码执行得分
+    # 6. Execution-result agreement + execution score of the original code
     exec_match = 0.0
     exec_method = None
-    # 🔥 NEW: 原始代码直接执行得分
+    # Direct execution score of the original code
     orig_exec_score = 0.0
     orig_exec_pass_rate = 0.0
     if ground_truth and original_code and reconstructed_code:
@@ -629,7 +629,7 @@ def score_code_consistency(
             exec_method = orig_details.get("method", "unknown")
             exec_match = 1.0 if orig_passed == recon_passed else 0.0
 
-            # 🔥 NEW: 原始代码执行得分（pass@k 语义）
+            # Execution score of the original code (pass@k semantics)
             orig_pass_rate = orig_details.get("pass@k", orig_details.get("pass@1", 0.0))
             if isinstance(orig_pass_rate, list):
                 orig_pass_rate = orig_pass_rate[0] if len(orig_pass_rate) > 0 else 0.0
@@ -638,12 +638,12 @@ def score_code_consistency(
         except Exception:
             exec_match = 0.0
 
-    # === 语义相似度 ===
+    # === Semantic similarity ===
     semantic_sim = 0.0
-    # 如果有语义编码器，可以在这里计算
-    # （由调用方在 BMC probe 中计算，这里只提供占位）
+    # Could be computed here if a semantic encoder is available
+    # (the caller computes it inside the BMC probe; this is only a placeholder)
 
-    # === 7. 🔥 NEW: 重构偏离惩罚 ===
+    # === 7. Reconstruction divergence penalty ===
     recon_failure_penalty = 1.0 if ast_validity_recon == 0.0 else 0.0
     divergence_penalty = (
         0.25 * (1.0 - char_sim) +
@@ -653,7 +653,7 @@ def score_code_consistency(
     )
     divergence_penalty = min(max(divergence_penalty, 0.0), 1.0)
 
-    # === 综合评分 ===
+    # === Overall score ===
     if weights:
         consistency_score = (
             weights.get("token_accuracy", 0) * token_acc +
@@ -668,27 +668,27 @@ def score_code_consistency(
             weights.get("divergence_penalty", 0) * (1.0 - divergence_penalty)
         )
     elif scoring_version == "v2":
-        # ========== v2 优化评分策略（基于消融实验优化） ==========
-        # 消融实验关键发现:
-        #   1. OrigExec × Char = 1.0000 ROC-AUC（exec可用时完美分离）
-        #   2. Char × Struct × OrigExec = 0.9221
+        # ========== v2 scoring strategy (tuned on the ablation study) ==========
+        # Key findings of the ablation study:
+        #   1. OrigExec x Char = 1.0000 ROC-AUC (perfect separation when exec is available)
+        #   2. Char x Struct x OrigExec = 0.9221
         #   3. Char Similarity = 0.5682
-        #   4. V1 BMC Score = 0.4829（比随机还差）
+        #   4. V1 BMC Score = 0.4829 (worse than random)
         #
-        # 核心公式:
-        #   - exec 可用时: exec × char × struct → 完美分离
-        #   - exec 不可用时: char × struct（消融最优组合）
+        # Core formula:
+        #   - exec available:   exec x char x struct -> perfect separation
+        #   - exec unavailable: char x struct (best combination in the ablation)
 
         if ast_validity_orig == 1.0 and ast_validity_recon == 1.0:
             if orig_exec_score > 0:
-                # 有执行信息 → 消融最优公式
+                # Execution info available -> best ablation formula
                 consistency_score = orig_exec_score * char_sim * struct_match
             else:
-                # 无执行信息 → char × struct（来自消融实验最优组合）
+                # No execution info -> char x struct (best ablation combination)
                 consistency_score = char_sim * struct_match
             consistency_score = min(consistency_score, 1.0)
         elif ast_validity_orig == 1.0 and ast_validity_recon == 0.0:
-            # 重构失败，struct_match 通常为 0
+            # Reconstruction failed, so struct_match is usually 0
             if orig_exec_score > 0:
                 consistency_score = orig_exec_score * char_sim * 0.5
             else:
@@ -700,7 +700,7 @@ def score_code_consistency(
             base_score = 0.15 * struct_match + 0.05 * char_sim
             consistency_score = base_score
     else:
-        # v1 激进评分策略（向后兼容）
+        # v1 aggressive scoring strategy (kept for backward compatibility)
         if ast_validity_orig == 1.0 and ast_validity_recon == 1.0:
             base = 0.70
             consistency_score = (
@@ -723,22 +723,22 @@ def score_code_consistency(
                 consistency_score *= 0.7
 
     return {
-        # 原始 BMC 指标（保留用于兼容性）
+        # Original BMC metrics (kept for compatibility)
         "token_accuracy": token_acc,
         "char_similarity": char_sim,
         "semantic_similarity": semantic_sim,
         "consistency_score": consistency_score,
-        # Coding 专用指标
+        # Coding-specific metrics
         "ast_validity_orig": ast_validity_orig,
         "ast_validity_recon": ast_validity_recon,
         "function_signature_match": sig_match,
         "structural_match": struct_match,
         "code_execution_match": exec_match,
         "exec_method": exec_method,
-        # 提取的代码
+        # Extracted code
         "original_code": original_code,
         "reconstructed_code": reconstructed_code,
-        # 🔥 NEW: 优化版新增指标
+        # Metrics added by the tuned version
         "orig_exec_score": orig_exec_score,
         "orig_exec_pass_rate": orig_exec_pass_rate,
         "divergence_penalty": divergence_penalty,
@@ -746,7 +746,7 @@ def score_code_consistency(
 
 
 # ============================================================================
-# 生成函数（与现有框架保持一致）
+# Generation helpers (kept consistent with the existing framework)
 # ============================================================================
 
 def generate_with_confidence(
@@ -807,7 +807,7 @@ def generate_with_confidence(
 
 
 # ============================================================================
-# 评估函数
+# Evaluation
 # ============================================================================
 
 def evaluate_all_methods(
@@ -828,13 +828,13 @@ def evaluate_all_methods(
     enabled_methods: set = None,
 ):
     """
-    使用所有方法评估 Coding 任务
+    Evaluate a coding task with all methods.
 
-    方法：
-    1. Model Confidence - 生成时的平均 token 概率
-    2. Self-Consistency - 多次生成 + majority voting（通过执行验证）
-    3. Self-Evaluation - 让模型评估自己的代码
-    4. BMC Score - 双向流形一致性 (BMC)
+    Methods:
+    1. Model Confidence - mean token probability during generation
+    2. Self-Consistency - repeated generation + majority voting (verified by execution)
+    3. Self-Evaluation - the model judges its own code
+    4. BMC Score - Bidirectional Manifold Consistency (BMC)
 
     enabled_methods: set of str, e.g. {"bmc"}, {"mc", "bmc"}
                     "mc"=Model Confidence, "sc"=Self-Consistency,
@@ -861,7 +861,7 @@ def evaluate_all_methods(
             input_ids = tokenizer.encode(prompt, return_tensors='pt').to(device)
 
             # ============================================
-            # 1️⃣ 生成主答案 + Model Confidence
+            # 1. Generate the main answer + Model Confidence
             # ============================================
             output_ids, confidence_scores = generate_with_confidence(
                 model, tokenizer, input_ids,
@@ -880,16 +880,16 @@ def evaluate_all_methods(
 
             model_confidence = float(confidence_scores[0])
 
-            # 提取代码
+            # Extract the code
             main_code = CodeMetricsExtractor.extract_code(main_text)
 
-            # 检查正确性（通过执行）
+            # Check correctness by executing the tests
             is_correct, exec_details = CodeMetricsValidator.validate_code_execution(
                 main_code or main_text, gt_answer, task_name
             )
 
             # ============================================
-            # 2️⃣ Self-Consistency (生成N次) — 可选
+            # 2. Self-Consistency (N generations) - optional
             # ============================================
             self_consistency_score = -1.0
             sc_codes = []
@@ -930,7 +930,7 @@ def evaluate_all_methods(
                     self_consistency_score = 0.0
 
             # ============================================
-            # 3️⃣ Self-Evaluation (让模型评估) — 可选
+            # 3. Self-Evaluation (the model judges its own output) - optional
             # ============================================
             self_eval_score = -1.0
             eval_text = ""
@@ -983,7 +983,7 @@ Your confidence score:"""
 
 
             # ============================================
-            # 4️⃣ BMC Score — 可选
+            # 4. BMC Score - optional
             # ============================================
             bmc_score = -1.0
             bmc_details = {}
@@ -1005,11 +1005,11 @@ Your confidence score:"""
                         bmc_details = {k: v for k, v in bmc_result.items()
                                       if k != 'consistency_score'}
                     except Exception as e:
-                        print(f"⚠️  BMC failed: {e}")
+                        print(f"[WARN] BMC failed: {e}")
                         bmc_score = 0.0
 
             # ============================================
-            # 📊 汇总结果
+            # Collect the results
             # ============================================
             result = {
                 "question": question,
@@ -1019,36 +1019,36 @@ Your confidence score:"""
                 "ground_truth": gt_answer,
                 "is_correct": int(is_correct),
 
-                # 四种方法的分数
+                # Scores of the four methods
                 "model_confidence": float(model_confidence),
                 "self_consistency_score": float(self_consistency_score),
                 "self_eval_score": float(self_eval_score),
                 "bmc_score": float(bmc_score),
 
-                # 执行细节
+                # Execution details
                 "exec_details": exec_details,
 
-                # BMC 详情
+                # BMC details
                 "bmc_details": bmc_details,
 
-                # Self-Consistency 详情
+                # Self-Consistency details
                 "sc_codes": sc_codes,
                 "sc_count": len(sc_codes),
 
-                # Self-Evaluation 详情
+                # Self-Evaluation details
                 "self_eval_text": eval_text,
             }
 
             all_results.append(result)
 
-            # 打印示例
+            # Print one example
             if dist.get_rank() == 0 and sample_idx == 0:
                 print(f"\n{'='*80}")
                 print(f"Question: {question[:100]}...")
                 print(f"Generated Code: {main_code[:100] if main_code else '(none)'}")
                 print(f"Is Correct: {is_correct}")
                 print("-" * 80)
-                print(f"📊 Scores:")
+                print(f"Scores:")
                 if "mc" in enabled_methods:
                     print(f"  Model Confidence:     {model_confidence:.4f}")
                 if "sc" in enabled_methods:
@@ -1063,13 +1063,13 @@ Your confidence score:"""
                         print(f"  BMC Struct Match:      {bmc_details.get('structural_match', 0):.4f}")
                 print(f"{'='*80}\n")
 
-    # 计算准确率
+    # Compute the accuracy
     num_correct = sum(r['is_correct'] for r in all_results)
     accuracy = num_correct / len(all_results) if all_results else 0.0
 
     if dist.get_rank() == 0:
         print(f"\n{'='*80}")
-        print(f"📊 Overall Statistics ({task_name.upper()}):")
+        print(f"Overall Statistics ({task_name.upper()}):")
         print(f"  Total Samples: {len(all_results)}")
         print(f"  Correct: {num_correct}")
         print(f"  Accuracy: {accuracy:.2%}")
@@ -1094,35 +1094,35 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--semantic_model_path", type=str, default=None,
-                       help="语义编码器本地路径（可选，不填则尝试从 HuggingFace 自动下载）")
+                       help="Local path to the semantic encoder (optional; if unset, it is auto-downloaded from HuggingFace)")
     parser.add_argument("--skip_semantic", action="store_true",
-                       help="跳过语义编码器加载（无网络时使用，semantic_similarity 将为 0）")
+                       help="Skip loading the semantic encoder (for offline use; semantic_similarity will be 0)")
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--dataset", type=str, choices=["humaneval", "mbpp"], required=True)
     parser.add_argument("--mode", type=str, choices=["direct_code", "with_reasoning"], default="direct_code",
-                       help="生成模式：direct_code=直接生成代码, with_reasoning=先生成解释再写代码")
+                       help="Generation mode: direct_code=emit code directly, with_reasoning=explain first, then write code")
     parser.add_argument("--max_new_tokens", type=int, default=512)
     parser.add_argument("--diffusion_steps", type=int, default=256)
     parser.add_argument("--temperature", type=float, default=0.0,
-                       help="采样温度，0表示贪心解码（与原始Dream框架一致）")
+                       help="Sampling temperature; 0 means greedy decoding (as in the original Dream framework)")
     parser.add_argument("--top_p", type=float, default=0.95,
-                       help="Top-p 采样参数（与原始Dream框架一致）")
+                       help="Top-p sampling parameter (as in the original Dream framework)")
     parser.add_argument("--escape_until", action="store_true", default=True,
-                       help="使用escape_until模式（与原始Dream框架一致）")
+                       help="Use the escape_until mode (as in the original Dream framework)")
     parser.add_argument("--output_dir", type=str, default="results_coding_bmc_dream/",
-                       help="输出目录")
+                       help="Output directory")
     parser.add_argument("--output_suffix", type=str, default="",
-                       help="输出文件名后缀，例如 _all_methods")
+                       help="Suffix appended to the output file name, e.g. _all_methods")
 
-    # BMC 参数
+    # BMC parameters
     parser.add_argument("--t_probe", type=float, default=0.9)
     parser.add_argument("--num_reverse_steps", type=int, default=16)
     parser.add_argument("--num_samples", type=int, default=4,
-                       help="BMC 多次采样次数")
+                       help="Number of BMC sampling repetitions")
     parser.add_argument("--skip_bmc", action="store_true")
     parser.add_argument("--methods", type=str, default="mc,sc,se,bmc",
-                        help="要运行的方法，逗号分隔: mc(Model Confidence), sc(Self-Consistency), "
-                             "se(Self-Evaluation), bmc. 例如: bmc 只跑BMC, mc,bmc 跑MC和BMC")
+                        help="Comma-separated list of methods to run: mc(Model Confidence), sc(Self-Consistency), "
+                             "se(Self-Evaluation), bmc. For example: bmc runs BMC only, mc,bmc runs MC and BMC")
     parser.add_argument("--adaptive_t", action="store_true", default=True)
     parser.add_argument("--aggressive_scoring", action="store_true", default=True)
     parser.add_argument("--optimized_weights_path", type=str, default=None)
@@ -1130,13 +1130,13 @@ if __name__ == "__main__":
     # Self-Consistency
     parser.add_argument("--self_consistency_n", type=int, default=10)
 
-    # 数据集
+    # Dataset
     parser.add_argument("--subsample", type=int, default=-1,
-                       help="子采样数量，-1表示使用全部数据")
+                       help="Number of subsampled examples; -1 means use the full dataset")
 
     args = parser.parse_args()
 
-    # 加载模型
+    # Load the model
     if dist.get_rank() == 0:
         print(f"\n{'='*80}")
         print("Loading Dream model for Coding BMC...")
@@ -1165,7 +1165,7 @@ if __name__ == "__main__":
     }
     task_system_prompt = task_system_prompts.get(args.dataset, "")
 
-    # 加载数据集
+    # Load the dataset
     if args.dataset == "humaneval":
         dataset = HumanEvalCodingDataset(
             tokenizer=tokenizer,
@@ -1190,7 +1190,7 @@ if __name__ == "__main__":
         collate_fn=dataset.collate_fn,
     )
 
-    # 初始化 BMC 探针
+    # Initialize the BMC probe
     bmc_probe = None
     if not args.skip_bmc:
         if dist.get_rank() == 0:
@@ -1206,20 +1206,20 @@ if __name__ == "__main__":
             from lm_eval.bmc.task_utils import get_task_config
             task_config = get_task_config(args.dataset)
 
-            # 处理语义模型路径（优先级：命令行指定 > HF自动下载 > 降级禁用）
+            # Resolve the semantic model path (priority: CLI path > HF auto-download > disabled)
             semantic_path = args.semantic_model_path
             if semantic_path and os.path.exists(semantic_path):
-                pass  # 使用指定路径
+                pass  # Use the path given on the command line
             elif semantic_path and not os.path.exists(semantic_path):
                 if dist.get_rank() == 0:
-                    print(f"⚠️  Semantic model not found at {semantic_path}, will try HuggingFace auto-download")
+                    print(f"[WARN] Semantic model not found at {semantic_path}, will try HuggingFace auto-download")
                 semantic_path = None
             else:
-                semantic_path = None  # 留空，BMC内部会尝试HF自动加载
+                semantic_path = None  # Left empty so that BMC tries the HF auto-download
 
             if args.skip_semantic:
                 if dist.get_rank() == 0:
-                    print("⚠️  --skip_semantic set, disabling semantic features")
+                    print("[WARN] --skip_semantic set, disabling semantic features")
                 semantic_path = None
 
             from lm_eval.bmc.bmc_core_dream import BMCEstimatorDream
@@ -1240,23 +1240,23 @@ if __name__ == "__main__":
             )
 
             if dist.get_rank() == 0:
-                print(f"✓ BMC initialized for coding task")
+                print(f"[OK] BMC initialized for coding task")
                 if bmc_probe is not None and bmc_probe.semantic_encoder is not None:
-                    print(f"  ✅ Semantic encoder loaded (all-MiniLM-L6-v2)")
+                    print(f"  [OK] Semantic encoder loaded (all-MiniLM-L6-v2)")
                 elif bmc_probe is not None:
-                    print(f"  ⚠️  Semantic encoder FAILED to load (semantic_similarity will be 0)")
+                    print(f"  [WARN] Semantic encoder FAILED to load (semantic_similarity will be 0)")
                 else:
-                    print(f"  ⚠️  BMC not initialized")
+                    print(f"  [WARN] BMC not initialized")
                 print("="*60 + "\n")
         except Exception as e:
             if dist.get_rank() == 0:
-                print(f"❌ BMC initialization failed: {e}")
+                print(f"[ERROR] BMC initialization failed: {e}")
             bmc_probe = None
 
-    # 运行评估
+    # Run the evaluation
     enabled_methods = {m.strip().lower() for m in args.methods.split(",")}
     if dist.get_rank() == 0:
-        print(f"\n📋 Enabled methods: {sorted(enabled_methods)}")
+        print(f"\nEnabled methods: {sorted(enabled_methods)}")
 
     metrics = evaluate_all_methods(
         model,
@@ -1271,11 +1271,11 @@ if __name__ == "__main__":
         self_consistency_n=args.self_consistency_n,
         temperature=args.temperature,
         top_p=args.top_p,
-        alg="entropy",  # 原始Dream使用entropy（非escape_until，因为until=[]为空）
+        alg="entropy",  # The original Dream uses entropy (not escape_until, since until=[] is empty)
         enabled_methods=enabled_methods,
     )
 
-    # 保存结果
+    # Save the results
     os.makedirs(args.output_dir, exist_ok=True)
     current_rank = dist.get_rank()
     filename = f"{args.output_dir}/{args.dataset}_{args.mode}_rank{current_rank}{args.output_suffix}.json"
@@ -1307,7 +1307,7 @@ if __name__ == "__main__":
 
     if current_rank == 0:
         print(f"\n{'='*80}")
-        print("✅ Evaluation completed!")
+        print("[OK] Evaluation completed.")
         print(f"Results saved to: {args.output_dir}")
         print(f"{'='*80}\n")
 

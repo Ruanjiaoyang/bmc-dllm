@@ -1,5 +1,5 @@
 """
-Dream模型的完整对比实验：8种采样方法（对齐LLaDA框架）
+Dream model full comparison experiment: 8 sampling methods (aligned with the LLaDA framework)
 - Greedy (no correction)
 - Self-Consistency (N=3)
 - Self-Consistency (N=10)
@@ -9,12 +9,12 @@ Dream模型的完整对比实验：8种采样方法（对齐LLaDA框架）
 - Best-of-N BMC (N=10)
 - BMC-Guided (Ours)
 
-🔥 对齐LLaDA框架：
-- 只生成，不验证（验证统一在parse阶段）
-- 支持N=3和N=10变体
-- 添加超时保护
-- 添加文件存在性检查
-- 保留Dream特有配置（diffusion_generate, alg_temp等）
+Aligned with the LLaDA framework:
+- Generation only, no verification (verification happens in the parse stage)
+- Supports the N=3 and N=10 variants
+- Timeout protection
+- Checks for already existing result files
+- Keeps the Dream-specific settings (diffusion_generate, alg_temp, ...)
 """
 import argparse
 import json
@@ -50,13 +50,13 @@ from eval_bmc_dream import (
 
 
 def init_seed(seed):
-    """只用于数据加载的确定性，不影响生成随机性"""
+    """Seed only for deterministic data loading; generation randomness is unaffected."""
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    # 注意：不设置 cudnn.deterministic，允许生成时的随机性
+    # Note: cudnn.deterministic is deliberately left unset so generation stays random
 
 
 def setup_ddp():
@@ -104,18 +104,18 @@ class CustomDistributedSampler(DistributedSampler):
 
 def check_results_exist(output_dir, dataset, method_name, gen_length, steps, world_size):
     """
-    检查某个方法的结果是否已完整存在（所有rank的文件都存在）
+    Check whether a method's results are already complete (files from every rank exist).
     
     Args:
-        output_dir: 输出目录
-        dataset: 数据集名称
-        method_name: 方法名称（包含后缀，如 "self_consistency_N10"）
-        gen_length: 生成长度
+        output_dir: output directory
+        dataset: dataset name
+        method_name: method name including its suffix, e.g. "self_consistency_N10"
+        gen_length: generation length
         steps: diffusion steps
-        world_size: 总rank数
+        world_size: total number of ranks
     
     Returns:
-        (bool, list, list): (是否全部存在, 存在的ranks, 缺失的ranks)
+        (bool, list, list): (whether all exist, ranks present, ranks missing)
     """
     missing_ranks = []
     existing_ranks = []
@@ -123,8 +123,8 @@ def check_results_exist(output_dir, dataset, method_name, gen_length, steps, wor
     for rank in range(world_size):
         filename = f"{output_dir}/{dataset}_{method_name}_{gen_length}_{steps}_{rank}_generations.json"
         if os.path.exists(filename):
-            # 简单检查文件大小，确保不是空文件
-            if os.path.getsize(filename) > 100:  # 至少100字节
+            # Basic size check to rule out empty files
+            if os.path.getsize(filename) > 100:  # at least 100 bytes
                 existing_ranks.append(rank)
             else:
                 missing_ranks.append(rank)
@@ -138,58 +138,58 @@ def check_results_exist(output_dir, dataset, method_name, gen_length, steps, wor
 
 def load_optimized_weights(task_name: str = None, weights_path: str = None, verbose: bool = True):
     """
-    加载优化权重（支持自动搜索）
+    Load optimized weights, searching for them automatically when needed.
     
     Args:
-        task_name: 任务名称
-        weights_path: 权重文件路径（如果指定则直接加载）
-        verbose: 是否打印详细信息
+        task_name: task name
+        weights_path: path to a weights file; loaded directly when provided
+        verbose: whether to print detailed information
     
     Returns:
-        Dict: 权重字典，如果没找到返回None
+        Dict: the weights, or None if nothing was found
     """
     import glob
     
     if weights_path:
-        # 指定了权重文件
+        # An explicit weights file was given
         if not os.path.exists(weights_path):
             if verbose:
-                print(f"⚠️  指定的权重文件不存在: {weights_path}")
+                print(f"[WARN] Specified weights file does not exist: {weights_path}")
             return None
 
         try:
             with open(weights_path, 'r') as f:
                 data = json.load(f)
 
-            # 🔧 修复：支持多种格式（按优先级检查）
+            # Several file formats are supported, checked in priority order
             weights = None
             method = None
             metrics = None
 
-            # 格式1: 直接包含 best_weights（优先，这是 optimize_bmc_weights_dream.py 的输出格式）
+            # Format 1: top-level best_weights (preferred; written by optimize_bmc_weights_dream.py)
             if 'best_weights' in data:
                 weights = data['best_weights']
                 method = data.get('best_method', 'unknown')
                 metrics = data.get('best_metrics', {})
             
-            # 格式2: 包含 weights 键（单个结果）
+            # Format 2: a weights key holding a single result
             elif 'weights' in data:
                 weights = data['weights']
                 method = data.get('method', 'unknown')
                 metrics = data.get('metrics', {})
             
-            # 格式3: 包含 all_results 列表（新格式，optimize_bmc_weights_dream.py 的输出）
+            # Format 3: an all_results list (new format from optimize_bmc_weights_dream.py)
             elif 'all_results' in data:
-                # 找最佳方法
+                # Pick the best method
                 best_result = max(data['all_results'],
                                 key=lambda x: x['metrics'].get('roc_auc', 0))
                 weights = best_result['weights']
                 method = best_result['method']
                 metrics = best_result['metrics']
             
-            # 格式4: 包含 optimized_results 列表（旧格式）
+            # Format 4: an optimized_results list (legacy format)
             elif 'optimized_results' in data:
-                # 找最佳方法
+                # Pick the best method
                 best_result = max(data['optimized_results'],
                                 key=lambda x: x['metrics'].get('roc_auc', 0))
                 weights = best_result['weights']
@@ -198,35 +198,35 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
             
             else:
                 if verbose:
-                    print(f"⚠️  权重文件格式不正确: {weights_path}")
-                    print(f"     可用的键: {list(data.keys())}")
-                    print(f"     期望的键: 'best_weights', 'weights', 'all_results', 或 'optimized_results'")
+                    print(f"[WARN] Unrecognized weights file format: {weights_path}")
+                    print(f"     Available keys: {list(data.keys())}")
+                    print(f"     Expected one of: 'best_weights', 'weights', 'all_results', 'optimized_results'")
                 return None
 
             if weights is None:
                 if verbose:
-                    print(f"⚠️  无法从文件中提取权重")
+                    print(f"[WARN] Could not extract weights from the file")
                 return None
 
-            # 验证权重字典包含必要的键
+            # Make sure the weights contain every required key
             required_keys = ['token_accuracy', 'semantic_similarity', 'number_retention', 
                            'final_answer_match', 'char_similarity', 'avg_confidence']
             missing_keys = [k for k in required_keys if k not in weights]
             if missing_keys:
                 if verbose:
-                    print(f"⚠️  权重缺少必要的键: {missing_keys}")
+                    print(f"[WARN] Weights are missing required keys: {missing_keys}")
                 return None
 
             if verbose:
                 print(f"\n{'='*60}")
-                print(f"✅ 已加载优化权重")
+                print(f"[OK] Loaded optimized weights")
                 print(f"{'='*60}")
-                print(f"文件: {weights_path}")
-                print(f"方法: {method}")
+                print(f"File: {weights_path}")
+                print(f"Method: {method}")
                 print(f"ROC-AUC: {metrics.get('roc_auc', 0):.4f}")
                 print(f"PR-AUC: {metrics.get('pr_auc', 0):.4f}")
                 print(f"Score Gap: {metrics.get('score_gap', 0):.4f}")
-                print(f"\n权重配置:")
+                print(f"\nWeight configuration:")
                 for feat, weight in sorted(weights.items(), key=lambda x: -x[1]):
                     print(f"  {feat:25s}: {weight:.4f}")
                 print(f"{'='*60}\n")
@@ -235,20 +235,20 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
 
         except Exception as e:
             if verbose:
-                print(f"⚠️  加载权重文件失败: {e}")
+                print(f"[WARN] Failed to load the weights file: {e}")
                 import traceback
                 traceback.print_exc()
             return None
 
-    # 自动搜索最佳权重
+    # Search automatically for the best weights
     if task_name:
-        # 搜索优化结果目录
+        # Look through the optimization result directories
         patterns = [
             # weights released with this repo (weights/<task>.json), then any newly searched runs
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", f"{task_name}.json"),
             f"bmc_optimization_{task_name}_*/optimization_results.json",
             f"best_weights_{task_name}_*.json",
-            "bmc_optimization_*/optimization_results.json",  # 通用搜索
+            "bmc_optimization_*/optimization_results.json",  # generic search
         ]
 
         best_file = None
@@ -261,22 +261,22 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
                     with open(filepath, 'r') as f:
                         data = json.load(f)
 
-                    # 检查是否匹配任务
+                    # Check that the file matches the task
                     file_task = data.get('task', 'unknown')
                     if task_name and file_task != task_name:
                         continue
 
-                    # 🔧 修复：支持多种格式
+                    # Several file formats are supported
                     current_roc = 0.0
                     
-                    # 格式1: best_weights（最新格式）
+                    # Format 1: best_weights (latest format)
                     if 'best_weights' in data and 'best_metrics' in data:
                         current_roc = data['best_metrics'].get('roc_auc', 0)
                         if current_roc > best_roc:
                             best_roc = current_roc
                             best_file = filepath
                     
-                    # 格式2: all_results列表
+                    # Format 2: all_results list
                     elif 'all_results' in data:
                         for result in data['all_results']:
                             if 'weights' not in result:
@@ -286,7 +286,7 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
                                 best_roc = roc
                                 best_file = filepath
                     
-                    # 格式3: optimized_results列表（旧格式）
+                    # Format 3: optimized_results list (legacy format)
                     elif 'optimized_results' in data:
                         for result in data['optimized_results']:
                             if 'weights' not in result:
@@ -300,11 +300,11 @@ def load_optimized_weights(task_name: str = None, weights_path: str = None, verb
 
         if best_file:
             if verbose:
-                print(f"🔍 自动发现最佳权重: {best_file}")
+                print(f"Best weights found automatically: {best_file}")
             return load_optimized_weights(task_name, best_file, verbose)
 
     if verbose:
-        print(f"ℹ️  未找到优化权重，将使用默认配置")
+        print(f"[INFO] No optimized weights found; using the default configuration")
 
     return None
 
@@ -317,9 +317,9 @@ def generate_single_sample(
     max_new_tokens=512,
     temperature=0.1,
     diffusion_steps=64,
-    alg_temp=0.0,  # 🔥 新增：控制随机性
+    alg_temp=0.0,  # controls randomness
 ):
-    """生成单个样本（使用Dream的diffusion_generate）"""
+    """Generate a single sample with Dream's diffusion_generate."""
     with torch.no_grad():
         outputs = model.diffusion_generate(
             input_ids,
@@ -329,13 +329,13 @@ def generate_single_sample(
             temperature=temperature,
             top_p=0.9,
             alg="entropy",
-            alg_temp=alg_temp,  # 🔥 添加
+            alg_temp=alg_temp,
             return_dict_in_generate=True,
             output_history=False,
         )
         output_ids = outputs.sequences
 
-    # 计算实际prompt长度（排除padding）
+    # Actual prompt length, excluding padding
     actual_prompt_len = (input_ids[0] != tokenizer.pad_token_id).sum().item()
     generated_text = tokenizer.decode(
         output_ids[0, actual_prompt_len:].tolist(),
@@ -353,43 +353,43 @@ def evaluate_greedy(
     block_length=32,
 ):
     """
-    方法1: Greedy (no correction)
-    单次生成，temperature=0.1, alg_temp=0.0（确定性）
-    🔥 支持batch并行
-    🔥 对齐LLaDA：只生成，不验证
+    Method 1: Greedy (no correction)
+    One generation pass with temperature=0.1 and alg_temp=0.0 (deterministic).
+    Supports batched parallel generation.
+    Aligned with LLaDA: generation only, no verification.
     """
     model.eval()
-    all_generations = []  # 🔥 改名
+    all_generations = []
 
     for batch in tqdm(dataloader, disable=(dist.get_rank() != 0)):
-        batch_start_time = time.time()  # 🔥 记录batch开始时间
+        batch_start_time = time.time()  # batch start time
         
         questions = batch["questions"]
         gt_answers = batch["answers"]
-        prompts = batch.get("prompts", questions)  # 🔥 获取prompts
+        prompts = batch.get("prompts", questions)
         batch_size = len(questions)
 
         input_ids = batch["input_ids"].to(model.device)
         attention_mask = batch["attention_mask"].to(model.device)
 
-        # 🔥 Batch生成 (temperature=0.1, alg_temp=0.0 确保确定性)
+        # Batched generation (temperature=0.1, alg_temp=0.0 keep it deterministic)
         with torch.no_grad():
             outputs = model.diffusion_generate(
                 input_ids,
                 attention_mask=attention_mask,
                 max_new_tokens=gen_length,
                 steps=steps,
-                temperature=0.1,      # 🔥 低温保证质量
+                temperature=0.1,      # low temperature for quality
                 top_p=0.9,
                 alg="entropy",
-                alg_temp=0.0,         # 🔥 确定性
+                alg_temp=0.0,         # deterministic
                 return_dict_in_generate=True,
                 output_history=False,
             )
             
             output_ids = outputs.sequences
 
-        # 正确处理padding：计算每个样本的实际prompt长度
+        # Handle padding: compute the actual prompt length of each sample
         generated_texts = []
         for i in range(batch_size):
             actual_prompt_len = (input_ids[i] != tokenizer.pad_token_id).sum().item()
@@ -399,25 +399,25 @@ def evaluate_greedy(
             )
             generated_texts.append(gen_text)
 
-        # 🔥 计算时间
+        # Timing
         batch_elapsed = time.time() - batch_start_time
         time_per_sample = batch_elapsed / batch_size
 
-        # 🔥 保存generations（对齐LLaDA格式）
+        # Store the generations in the LLaDA format
         for j in range(batch_size):
             all_generations.append({
                 "question": questions[j],
-                "prompt_input": prompts[j],  # 🔥 添加prompt
-                "generations": generated_texts[j],  # 🔥 单个字符串
+                "prompt_input": prompts[j],
+                "generations": generated_texts[j],  # single string
                 "ground_truth": gt_answers[j],
-                "method_info": {  # 🔥 添加method_info
+                "method_info": {
                     "method": "greedy",
                     "num_samples": 1,
-                    "elapsed_time": time_per_sample,  # 🔥 添加时间信息
+                    "elapsed_time": time_per_sample,
                 }
             })
 
-    return all_generations  # 🔥 直接返回列表
+    return all_generations
 
 
 def evaluate_self_consistency(
@@ -429,33 +429,33 @@ def evaluate_self_consistency(
     steps=64,
     temperature=0.7,
     block_length=32,
-    alg_temp=1.0,         # 🔥 Dream特有参数
+    alg_temp=1.0,         # Dream-specific parameter
 ):
     """
-    方法2: Self-Consistency
-    生成N次，保存所有候选（验证在parse阶段）
-    🔥 支持batch并行
-    🔥 对齐LLaDA：只生成，不验证
+    Method 2: Self-Consistency
+    Generate N candidates and keep them all (verification happens in the parse stage).
+    Supports batched parallel generation.
+    Aligned with LLaDA: generation only, no verification.
     """
     model.eval()
-    all_generations = []  # 🔥 改名
+    all_generations = []
 
     for batch in tqdm(dataloader, disable=(dist.get_rank() != 0)):
-        batch_start_time = time.time()  # 🔥 记录batch开始时间
+        batch_start_time = time.time()  # batch start time
         
         questions = batch["questions"]
         gt_answers = batch["answers"]
-        prompts = batch.get("prompts", questions)  # 🔥 获取prompts
+        prompts = batch.get("prompts", questions)
         batch_size = len(questions)
 
         input_ids = batch["input_ids"].to(model.device)
         attention_mask = batch["attention_mask"].to(model.device)
 
-        # 🔥 每个样本生成N次候选（batch并行）
+        # Generate N candidates per sample (batched)
         candidates_per_sample = [[] for _ in range(batch_size)]
 
         for i in range(num_samples):
-            # 🔥 每次采样使用不同的随机种子
+            # Use a different random seed for every draw
             torch.manual_seed(42 + i)
             torch.cuda.manual_seed_all(42 + i)
             np.random.seed(42 + i)
@@ -470,13 +470,13 @@ def evaluate_self_consistency(
                     temperature=temperature,  # 0.1
                     top_p=0.9,
                     alg="entropy",
-                    alg_temp=alg_temp,       # 🔥 1.0 提供随机性
+                    alg_temp=alg_temp,       # 1.0 introduces randomness
                     return_dict_in_generate=True,
                     output_history=False,
                 )
                 output_ids = outputs.sequences
 
-            # 正确处理padding：计算每个样本的实际prompt长度
+            # Handle padding: compute the actual prompt length of each sample
             generated_texts = []
             for j in range(batch_size):
                 actual_prompt_len = (input_ids[j] != tokenizer.pad_token_id).sum().item()
@@ -486,29 +486,29 @@ def evaluate_self_consistency(
                 )
                 generated_texts.append(gen_text)
 
-            # 为每个样本保存候选（只保存文本）
+            # Keep the candidate of each sample (text only)
             for k in range(batch_size):
                 candidates_per_sample[k].append(generated_texts[k])
 
-        # 🔥 计算时间
+        # Timing
         batch_elapsed = time.time() - batch_start_time
         time_per_sample = batch_elapsed / batch_size
 
-        # 🔥 保存generations（对齐LLaDA格式）
+        # Store the generations in the LLaDA format
         for j in range(batch_size):
             all_generations.append({
                 "question": questions[j],
-                "prompt_input": prompts[j],  # 🔥 添加prompt
-                "generations": candidates_per_sample[j],  # 🔥 保存所有候选（List[str]）
+                "prompt_input": prompts[j],
+                "generations": candidates_per_sample[j],  # all candidates (List[str])
                 "ground_truth": gt_answers[j],
-                "method_info": {  # 🔥 添加method_info
+                "method_info": {
                     "method": "self_consistency",
                     "num_samples": num_samples,
-                    "elapsed_time": time_per_sample,  # 🔥 添加时间信息
+                    "elapsed_time": time_per_sample,
                 }
             })
 
-    return all_generations  # 🔥 直接返回列表
+    return all_generations
 
 
 def evaluate_best_of_n_confidence(
@@ -520,29 +520,29 @@ def evaluate_best_of_n_confidence(
     steps=64,
     temperature=0.7,
     block_length=32,
-    alg_temp=1.0,         # 🔥 Dream特有参数
+    alg_temp=1.0,         # Dream-specific parameter
 ):
     """
-    方法3: Best-of-N (Confidence)
-    生成N次，保存所有候选+置信度（验证在parse阶段）
-    🔥 支持batch并行
-    🔥 对齐LLaDA：只生成，不验证
+    Method 3: Best-of-N (Confidence)
+    Generate N candidates and keep them with their confidence (verification happens in the parse stage).
+    Supports batched parallel generation.
+    Aligned with LLaDA: generation only, no verification.
     """
     model.eval()
-    all_generations = []  # 🔥 改名
+    all_generations = []
 
     for batch in tqdm(dataloader, disable=(dist.get_rank() != 0)):
-        batch_start_time = time.time()  # 🔥 记录batch开始时间
+        batch_start_time = time.time()  # batch start time
         
         questions = batch["questions"]
         gt_answers = batch["answers"]
-        prompts = batch.get("prompts", questions)  # 🔥 获取prompts
+        prompts = batch.get("prompts", questions)
         batch_size = len(questions)
 
         input_ids = batch["input_ids"].to(model.device)
         attention_mask = batch["attention_mask"].to(model.device)
 
-        # 🔥 每个样本生成N次候选（batch并行）
+        # Generate N candidates per sample (batched)
         candidates_per_sample = [[] for _ in range(batch_size)]
 
         for i in range(num_samples):
@@ -560,29 +560,29 @@ def evaluate_best_of_n_confidence(
                     temperature=temperature,  # 0.1
                     top_p=0.9,
                     alg="entropy",
-                    alg_temp=alg_temp,       # 🔥 1.0 提供随机性
+                    alg_temp=alg_temp,       # 1.0 introduces randomness
                     return_dict_in_generate=True,
                     output_history=False,
                 )
                 output_ids = outputs.sequences
 
-                # 🔥 Batch计算置信度（使用重新计算的logits）
+                # Compute the batch confidence from recomputed logits
                 model_outputs = model(output_ids)
                 logits = model_outputs.logits
                 
-                # 只关注生成的部分
+                # Only the generated part matters
                 input_len = input_ids.size(1)
                 generated_logits = logits[:, input_len-1:-1, :]
                 generated_ids = output_ids[:, input_len:]
                 
-                # 计算每个token的概率
+                # Per-token probabilities
                 probs = F.softmax(generated_logits, dim=-1)
                 token_probs = torch.gather(probs, 2, generated_ids.unsqueeze(-1)).squeeze(-1)
                 
-                # 平均置信度
+                # Mean confidence
                 avg_confidences = token_probs.mean(dim=1).float().cpu().numpy()
 
-                # 正确处理padding
+                # Handle padding
                 generated_texts = []
                 for j in range(batch_size):
                     actual_prompt_len = (input_ids[j] != tokenizer.pad_token_id).sum().item()
@@ -592,32 +592,32 @@ def evaluate_best_of_n_confidence(
                     )
                     generated_texts.append(gen_text)
 
-            # 为每个样本保存候选（包含置信度）
+            # Keep the candidate of each sample together with its confidence
             for k in range(batch_size):
                 candidates_per_sample[k].append({
                     "text": generated_texts[k],
                     "confidence": float(avg_confidences[k]),
                 })
 
-        # 🔥 计算时间
+        # Timing
         batch_elapsed = time.time() - batch_start_time
         time_per_sample = batch_elapsed / batch_size
 
-        # 🔥 保存generations（对齐LLaDA格式）
+        # Store the generations in the LLaDA format
         for j in range(batch_size):
             all_generations.append({
                 "question": questions[j],
-                "prompt_input": prompts[j],  # 🔥 添加prompt
-                "generations": candidates_per_sample[j],  # 🔥 List[Dict] with text and confidence
+                "prompt_input": prompts[j],
+                "generations": candidates_per_sample[j],  # List[Dict] with text and confidence
                 "ground_truth": gt_answers[j],
-                "method_info": {  # 🔥 添加method_info
+                "method_info": {
                     "method": "best_of_n_confidence",
                     "num_samples": num_samples,
-                    "elapsed_time": time_per_sample,  # 🔥 添加时间信息
+                    "elapsed_time": time_per_sample,
                 }
             })
 
-    return all_generations  # 🔥 直接返回列表
+    return all_generations
 
 
 def evaluate_best_of_n_bmc(
@@ -632,39 +632,39 @@ def evaluate_best_of_n_bmc(
     t_probe=0.9,
     num_reverse_steps=16,
     block_length=32,
-    alg_temp=1.0,         # 🔥 Dream特有参数
-    max_time_per_sample=6000,  # 🔥 每个样本最多100分钟
+    alg_temp=1.0,         # Dream-specific parameter
+    max_time_per_sample=6000,  # at most 100 minutes per sample
 ):
     """
-    方法4: Best-of-N (BMC)
-    生成N次，保存所有候选+BMC分数（验证在parse阶段）
-    🔥 支持batch并行（生成部分），BMC逐样本评估
-    🔥 对齐LLaDA：只生成，不验证
-    🔥 添加超时保护
+    Method 4: Best-of-N (BMC)
+    Generate N candidates and keep them with their BMC scores (verification happens in the parse stage).
+    Generation is batched; BMC is scored sample by sample.
+    Aligned with LLaDA: generation only, no verification.
+    Includes timeout protection.
     """
     model.eval()
-    all_generations = []  # 🔥 改名
+    all_generations = []
 
     for batch_idx, batch in enumerate(tqdm(dataloader, disable=(dist.get_rank() != 0))):
-        sample_start_time = time.time()  # 🔥 记录开始时间
+        sample_start_time = time.time()  # start time
         
         questions = batch["questions"]
         gt_answers = batch["answers"]
-        prompts = batch.get("prompts", questions)  # 🔥 获取prompts
+        prompts = batch.get("prompts", questions)
         batch_size = len(questions)
 
         input_ids = batch["input_ids"].to(model.device)
         attention_mask = batch["attention_mask"].to(model.device)
 
-        # 🔥 每个样本生成N次候选（batch并行）
+        # Generate N candidates per sample (batched)
         candidates_per_sample = [[] for _ in range(batch_size)]
 
         for i in range(num_samples):
-            # 🔥 检查超时
+            # Check for a timeout
             elapsed_time = time.time() - sample_start_time
             if elapsed_time > max_time_per_sample:
                 if dist.get_rank() == 0:
-                    print(f"\n⏰ Batch {batch_idx+1} timed out after {elapsed_time:.1f}s, completed {i}/{num_samples} samples")
+                    print(f"\n[WARN] Batch {batch_idx+1} timed out after {elapsed_time:.1f}s, completed {i}/{num_samples} samples")
                 break
             
             torch.manual_seed(42 + i)
@@ -681,13 +681,13 @@ def evaluate_best_of_n_bmc(
                     temperature=temperature,  # 0.1
                     top_p=0.9,
                     alg="entropy",
-                    alg_temp=alg_temp,       # 🔥 1.0
+                    alg_temp=alg_temp,       # 1.0
                     return_dict_in_generate=True,
                     output_history=False,
                 )
                 output_ids = outputs.sequences
 
-            # 正确处理padding
+            # Handle padding
             generated_texts = []
             for j in range(batch_size):
                 actual_prompt_len = (input_ids[j] != tokenizer.pad_token_id).sum().item()
@@ -697,11 +697,11 @@ def evaluate_best_of_n_bmc(
                 )
                 generated_texts.append(gen_text)
 
-            # 为每个样本保存候选（先不计算BMC）
+            # Keep the candidates first; BMC is scored afterwards
             for k in range(batch_size):
                 candidates_per_sample[k].append(generated_texts[k])
 
-        # 🔥 对每个样本的候选计算BMC分数
+        # Score the candidates of each sample with BMC
         for j in range(batch_size):
             question = questions[j]
             candidates_with_scores = []
@@ -723,25 +723,25 @@ def evaluate_best_of_n_bmc(
                     "bmc_score": bmc_score,
                 })
 
-            # 🔥 保存generations（对齐LLaDA格式）
+            # Store the generations in the LLaDA format
             all_generations.append({
                 "question": questions[j],
-                "prompt_input": prompts[j],  # 🔥 添加prompt
-                "generations": candidates_with_scores,  # 🔥 List[Dict] with text and bmc_score
+                "prompt_input": prompts[j],
+                "generations": candidates_with_scores,  # List[Dict] with text and bmc_score
                 "ground_truth": gt_answers[j],
-                "method_info": {  # 🔥 添加method_info
+                "method_info": {
                     "method": "best_of_n_bmc",
                     "num_samples": num_samples,
-                    "elapsed_time": time.time() - sample_start_time,  # 🔥 记录耗时
+                    "elapsed_time": time.time() - sample_start_time,  # elapsed time
                 }
             })
         
-        # 🔥 定期打印进度
+        # Print progress periodically
         if dist.get_rank() == 0 and (batch_idx + 1) % 10 == 0:
             avg_time = np.mean([g["method_info"]["elapsed_time"] for g in all_generations])
             print(f"  Progress: {batch_idx+1} batches, Avg time per batch: {avg_time:.1f}s")
 
-    return all_generations  # 🔥 直接返回列表
+    return all_generations
 
 
 def evaluate_bmc_guided(
@@ -757,29 +757,29 @@ def evaluate_bmc_guided(
     t_probe=0.9,
     num_reverse_steps=16,
     block_length=32,
-    alg_temp=1.0,         # 🔥 Dream特有参数
-    max_time_per_sample=3000,  # 🔥 每个样本最多50分钟
+    alg_temp=1.0,         # Dream-specific parameter
+    max_time_per_sample=3000,  # at most 50 minutes per sample
 ):
     """
-    方法5: BMC-Guided (Ours)
-    自适应resampling，保存所有尝试+BMC分数（验证在parse阶段）
+    Method 5: BMC-Guided (Ours)
+    Adaptive resampling; every attempt is kept with its BMC score (verification happens in the parse stage).
     
-    ⚠️  重要：此方法必须使用 batch_size=1
-    原因：每个样本的停止时间不同，无法batch并行
-    🔥 对齐LLaDA：只生成，不验证
-    🔥 添加超时保护
+    [WARN] Important: this method requires batch_size=1,
+    because each sample stops after a different number of attempts and cannot be batched.
+    Aligned with LLaDA: generation only, no verification.
+    Includes timeout protection.
     """
     model.eval()
-    all_generations = []  # 🔥 改名
+    all_generations = []
 
     for batch_idx, batch in enumerate(tqdm(dataloader, disable=(dist.get_rank() != 0))):
-        sample_start_time = time.time()  # 🔥 记录样本开始时间
+        sample_start_time = time.time()  # sample start time
         
         questions = batch["questions"]
         gt_answers = batch["answers"]
-        prompts = batch.get("prompts", questions)  # 🔥 获取prompts
+        prompts = batch.get("prompts", questions)
         
-        # ⚠️ 检查batch_size
+        # Check batch_size
         batch_size = len(questions)
         if batch_size != 1:
             raise ValueError(
@@ -796,15 +796,15 @@ def evaluate_bmc_guided(
 
         attempts = []
         stopped_early = False
-        timed_out = False  # 🔥 超时标志
+        timed_out = False  # timeout flag
 
-        # 自适应采样
+        # Adaptive sampling
         for attempt_idx in range(max_attempts):
-            # 🔥 检查是否超时
+            # Check for a timeout
             elapsed_time = time.time() - sample_start_time
             if elapsed_time > max_time_per_sample:
                 if dist.get_rank() == 0:
-                    print(f"\n⏰ Sample {batch_idx+1} timed out after {elapsed_time:.1f}s (>{max_time_per_sample}s)")
+                    print(f"\n[WARN] Sample {batch_idx+1} timed out after {elapsed_time:.1f}s (>{max_time_per_sample}s)")
                 timed_out = True
                 break
             
@@ -821,10 +821,10 @@ def evaluate_bmc_guided(
                 max_new_tokens=gen_length,
                 temperature=temperature,
                 diffusion_steps=steps,
-                alg_temp=alg_temp,  # 🔥 传递参数
+                alg_temp=alg_temp,
             )
 
-            # BMC评估
+            # BMC evaluation
             try:
                 bmc_result = bmc_probe.probe(
                     question=question,
@@ -841,41 +841,41 @@ def evaluate_bmc_guided(
                 "bmc_score": bmc_score,
             })
 
-            # 早停
+            # Early stopping
             if bmc_score >= bmc_threshold:
                 stopped_early = True
                 break
 
-        # 🔥 保存generations（对齐LLaDA格式）
+        # Store the generations in the LLaDA format
         all_generations.append({
             "question": question,
-            "prompt_input": prompt,  # 🔥 添加prompt
-            "generations": attempts,  # 🔥 所有尝试（List[Dict] with text and bmc_score）
+            "prompt_input": prompt,
+            "generations": attempts,  # every attempt (List[Dict] with text and bmc_score)
             "ground_truth": gt_answer,
-            "method_info": {  # 🔥 添加method_info
+            "method_info": {
                 "method": "bmc_guided",
                 "max_attempts": max_attempts,
                 "actual_attempts": len(attempts),
                 "stopped_early": stopped_early,
-                "timed_out": timed_out,  # 🔥 记录是否超时
+                "timed_out": timed_out,
                 "threshold": bmc_threshold,
-                "elapsed_time": time.time() - sample_start_time,  # 🔥 记录耗时
+                "elapsed_time": time.time() - sample_start_time,  # elapsed time
             }
         })
         
-        # 🔥 定期打印进度（每10个样本）
+        # Print progress every 10 samples
         if dist.get_rank() == 0 and (batch_idx + 1) % 10 == 0:
             avg_attempts = np.mean([len(g["generations"]) for g in all_generations])
             avg_time = np.mean([g["method_info"]["elapsed_time"] for g in all_generations])
             print(f"  Progress: {batch_idx+1} samples, Avg attempts: {avg_attempts:.1f}, Avg time: {avg_time:.1f}s")
 
-    return all_generations  # 🔥 直接返回列表
+    return all_generations
 
 
 def merge_distributed_results(base_filename, num_ranks, output_dir):
-    """合并分布式结果"""
+    """Merge the distributed results."""
     print(f"\n{'=' * 80}")
-    print("🔗 Merging distributed results...")
+    print("Merging distributed results...")
     print(f"{'=' * 80}")
 
     time.sleep(3)
@@ -887,26 +887,26 @@ def merge_distributed_results(base_filename, num_ranks, output_dir):
             rank_files.append(rank_file)
 
     if len(rank_files) == 0:
-        print("❌ No rank files found!")
+        print("[ERROR] No rank files found!")
         return None
 
     print(f"Found {len(rank_files)}/{num_ranks} rank files")
 
-    # 加载并合并
+    # Load and merge
     all_results = []
     for rf in sorted(rank_files):
         try:
             with open(rf, 'r') as f:
                 data = json.load(f)
                 all_results.extend(data['results'])
-            print(f"  ✓ Loaded {len(data['results'])} samples from {Path(rf).name}")
+            print(f"  [OK] Loaded {len(data['results'])} samples from {Path(rf).name}")
         except Exception as e:
-            print(f"  ⚠️  Error loading {rf}: {e}")
+            print(f"  [WARN] Error loading {rf}: {e}")
 
     if not all_results:
         return None
 
-    # 重新计算指标
+    # Recompute the metrics
     accuracy = sum(1 for r in all_results if r["is_correct"]) / len(all_results)
     avg_samples = np.mean([r["num_samples"] for r in all_results])
     total_time = sum(r["time"] for r in all_results)
@@ -925,7 +925,7 @@ def merge_distributed_results(base_filename, num_ranks, output_dir):
     with open(merged_filename, 'w') as f:
         json.dump(merged_data, f, indent=2)
 
-    print(f"\n✅ Merged: {len(all_results)} samples")
+    print(f"\n[OK] Merged: {len(all_results)} samples")
     print(f"Accuracy: {accuracy:.2%}")
     print(f"Avg samples: {avg_samples:.2f}")
     print(f"Total time: {total_time:.1f}s")
@@ -950,32 +950,32 @@ if __name__ == "__main__":
                                "best_of_n_bmc", "bmc_guided", "all"],
                        default="all")
     parser.add_argument("--batch_size", type=int, default=8)
-    # 🔥 对齐LLaDA参数名
+    # Argument names aligned with LLaDA
     parser.add_argument("--gen_length", type=int, default=128,
                        help="Generation length")
     parser.add_argument("--steps", type=int, default=64,
                        help="Diffusion steps")
-    # 向后兼容（保留旧参数名）
+    # Backward compatibility: keep the old argument names
     parser.add_argument("--max_new_tokens", type=int, default=None,
                        help="(Deprecated) Use --gen_length instead")
     parser.add_argument("--diffusion_steps", type=int, default=None,
                        help="(Deprecated) Use --steps instead")
     parser.add_argument("--output_dir", type=str, default="results_comparison_dream/")
     
-    # BMC参数
+    # BMC parameters
     parser.add_argument("--t_probe", type=float, default=0.9)
     parser.add_argument("--num_reverse_steps", type=int, default=16)
     parser.add_argument("--bmc_num_samples", type=int, default=4)
     parser.add_argument("--bmc_threshold", type=float, default=0.75)
     parser.add_argument("--max_attempts", type=int, default=10)
     parser.add_argument("--adaptive_t", action="store_true", default=True,
-                       help="使用自适应t_probe")
+                       help="Use an adaptive t_probe")
     parser.add_argument("--aggressive_scoring", action="store_true", default=True,
-                       help="使用激进评分策略")
+                       help="Use the aggressive scoring strategy")
     parser.add_argument("--optimized_weights_path", type=str, default=None,
-                       help="优化权重文件路径")
+                       help="Path to the optimized weights file")
     
-    # 🔥 采样参数（支持N=3和N=10）
+    # Sampling parameters (N=3 and N=10 variants)
     parser.add_argument("--num_samples_3", type=int, default=3,
                        help="N for N=3 variants")
     parser.add_argument("--num_samples_10", type=int, default=10,
@@ -983,11 +983,11 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=0.1,
                        help="Temperature for sampling methods (0.1 recommended)")
     parser.add_argument("--alg_temp", type=float, default=1.0,
-                       help="🔥 Dream alg_temp parameter for randomness (1.0 recommended)")
+                       help="Dream alg_temp parameter controlling randomness (1.0 recommended)")
     parser.add_argument("--subsample", type=int, default=-1,
-                       help="评估样本数（-1表示全部）")
+                       help="Number of samples to evaluate (-1 for all)")
     
-    # 🔥 运行控制
+    # Run control
     parser.add_argument("--skip_existing", action="store_true",
                        help="Skip methods that already have complete results")
     parser.add_argument("--force_rerun", action="store_true",
@@ -995,7 +995,7 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    # 🔥 处理向后兼容
+    # Resolve the deprecated argument names
     if args.max_new_tokens is not None:
         args.gen_length = args.max_new_tokens
     if args.diffusion_steps is not None:
@@ -1003,7 +1003,7 @@ if __name__ == "__main__":
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # 加载模型
+    # Load the model
     if dist.get_rank() == 0:
         print(f"\n{'=' * 80}")
         print("Loading Dream model...")
@@ -1029,20 +1029,20 @@ if __name__ == "__main__":
     
     print(f"[DEBUG Rank {dist.get_rank()}] Tokenizer loaded successfully", flush=True)
 
-    # 初始化任务管理器
+    # Initialize the task manager
     task_manager = TaskManager()
     print(f"[DEBUG Rank {dist.get_rank()}] TaskManager initialized", flush=True)
 
-    # 🔥 加载优化权重（支持自动搜索）
+    # Load the optimized weights (searched automatically when unset)
     print(f"[DEBUG Rank {dist.get_rank()}] About to load optimized weights", flush=True)
     optimized_weights = load_optimized_weights(
         task_name=args.dataset,
-        weights_path=args.optimized_weights_path,  # None时自动搜索
+        weights_path=args.optimized_weights_path,  # None triggers the automatic search
         verbose=(dist.get_rank() == 0)
     )
     print(f"[DEBUG Rank {dist.get_rank()}] Optimized weights loaded", flush=True)
 
-    # 🔥 添加task相关配置
+    # Task-specific configuration
     task_system_prompts = {
         "gsm8k": """You are a math expert. Solve the problem step by step.""",
         "math": """You are a math expert. Solve the problem step by step and put your final answer in \\boxed{}.""",
@@ -1051,11 +1051,11 @@ if __name__ == "__main__":
     }
     task_system_prompt = task_system_prompts.get(args.dataset, "")
     
-    # 🔥 获取task_config
+    # Fetch task_config
     from lm_eval.bmc.task_utils import get_task_config
     task_config = get_task_config(args.dataset)
     
-    # 初始化BMC
+    # Initialize BMC
     if dist.get_rank() == 0:
         print("\n" + "="*80)
         print("Initializing BMC Probe...")
@@ -1064,7 +1064,7 @@ if __name__ == "__main__":
         print(f"Adaptive t: {args.adaptive_t}")
         print(f"Aggressive scoring: {args.aggressive_scoring}")
         if optimized_weights:
-            print("🔥 Using optimized weights (overrides aggressive_scoring)")
+            print("Using optimized weights (overrides aggressive_scoring)")
         print("="*80)
     
     print(f"[DEBUG Rank {dist.get_rank()}] About to initialize BMC Probe", flush=True)
@@ -1077,10 +1077,10 @@ if __name__ == "__main__":
         num_samples=args.bmc_num_samples,
         aggressive_scoring=(not optimized_weights and args.aggressive_scoring),
         optimized_weights=optimized_weights,
-        task_name=args.dataset,  # 🔥 NEW
-        task_config=task_config,  # 🔥 NEW
-        system_prompt=task_system_prompt,  # 🔥 NEW
-        use_chat_template=True,  # 🔥 NEW
+        task_name=args.dataset,
+        task_config=task_config,
+        system_prompt=task_system_prompt,
+        use_chat_template=True,
     )
     
     print(f"[DEBUG Rank {dist.get_rank()}] BMC Probe initialized successfully", flush=True)
@@ -1094,10 +1094,10 @@ if __name__ == "__main__":
         print(f"bmc_num_samples: {args.bmc_num_samples}")
         print(f"bmc_threshold: {args.bmc_threshold}")
         print(f"temperature: {args.temperature}")
-        print(f"alg_temp: {args.alg_temp} 🔥")
+        print(f"alg_temp: {args.alg_temp}")
         print(f"{'=' * 80}\n")
 
-    # 🔥 对齐LLaDA：使用DATASET_MAP字典加载数据集
+    # Aligned with LLaDA: load the dataset through the DATASET_MAP dict
     DATASET_MAP = {
         "gsm8k": GSM8KDataset,
         "humaneval": HumanEvalDataset,
@@ -1110,8 +1110,8 @@ if __name__ == "__main__":
     if args.dataset not in DATASET_MAP:
         raise ValueError(f"Unsupported dataset: {args.dataset}")
     
-    # 🔥 修复：分布式加载数据集，避免多进程竞争
-    # Rank 0 先加载（下载数据集），其他ranks等待
+    # Load the dataset in a distributed-safe order to avoid races between processes:
+    # rank 0 loads (and downloads) first while the other ranks wait
     if dist.get_rank() == 0:
         print(f"\n[Rank 0] Loading dataset: {args.dataset}...")
         dataset = DATASET_MAP[args.dataset](
@@ -1120,24 +1120,24 @@ if __name__ == "__main__":
         )
         print(f"[Rank 0] Dataset loaded successfully: {len(dataset)} samples")
     
-    # 同步：确保rank 0完成下载
+    # Synchronize: wait until rank 0 has finished downloading
     dist.barrier()
     
-    # 其他ranks现在可以安全地从缓存加载
+    # The remaining ranks can now load safely from the cache
     if dist.get_rank() != 0:
         dataset = DATASET_MAP[args.dataset](
             tokenizer=tokenizer,
             subsample=args.subsample,
         )
 
-    # 🔥 根据方法决定batch_size
+    # The batch size depends on the method
     def get_batch_size_for_method(method):
         if method == "bmc_guided":
             return 1
         else:
             return args.batch_size
 
-    # 🔥 对齐LLaDA：定义8个方法（使用字典传递参数）
+    # Aligned with LLaDA: the 8 methods, with their parameters passed as dicts
     methods_to_run = []
     if args.method == "all":
         methods_to_run = [
@@ -1151,7 +1151,7 @@ if __name__ == "__main__":
             ("bmc_guided", {}),
         ]
     else:
-        # 单个方法运行N=3和N=10两个变体（除了greedy和bmc_guided）
+        # A single method runs both the N=3 and N=10 variants (except greedy and bmc_guided)
         if args.method in ["self_consistency", "best_of_n_confidence", "best_of_n_bmc"]:
             methods_to_run = [
                 (args.method, {"num_samples": args.num_samples_3}),
@@ -1161,16 +1161,16 @@ if __name__ == "__main__":
             methods_to_run = [(args.method, {})]
 
     for method_name, method_params in methods_to_run:
-        # 🔥 构建完整方法名（包含N后缀）
+        # Build the full method name including the N suffix
         method_suffix = f"_N{method_params['num_samples']}" if "num_samples" in method_params else ""
         method_full_name = f"{method_name}{method_suffix}"
         
-        # 获取num_samples
+        # Resolve num_samples
         num_samples = method_params.get("num_samples", 1)
         if method_name == "bmc_guided":
             num_samples = args.max_attempts
         
-        # 🔥 检查文件是否已存在
+        # Check whether the result files already exist
         skip_existing = getattr(args, 'skip_existing', False)
         force_rerun = getattr(args, 'force_rerun', False)
         
@@ -1186,16 +1186,16 @@ if __name__ == "__main__":
             
             if all_exist:
                 if dist.get_rank() == 0:
-                    print(f"\n⏭️  Skipping {method_full_name}: All results exist")
+                    print(f"\nSkipping {method_full_name}: All results exist")
                 continue
             elif existing_ranks:
                 if dist.get_rank() == 0:
-                    print(f"\n⚠️  Partial results exist for {method_full_name}")
+                    print(f"\n[WARN] Partial results exist for {method_full_name}")
                     print(f"   Existing ranks: {existing_ranks}")
                     print(f"   Missing ranks: {missing_ranks}")
                     print(f"   Re-running all ranks for consistency...")
         
-        # 🔥 打印方法信息
+        # Print the method configuration
         if dist.get_rank() == 0:
             print(f"\n{'=' * 80}")
             print(f"Running: {method_full_name}")
@@ -1205,7 +1205,7 @@ if __name__ == "__main__":
             print(f"Batch size: {method_batch_size}")
             print(f"{'=' * 80}\n")
 
-        # 为当前方法创建dataloader
+        # Create the dataloader for the current method
         method_batch_size = get_batch_size_for_method(method_name)
         dataloader = DataLoader(
             dataset,
@@ -1214,7 +1214,7 @@ if __name__ == "__main__":
             collate_fn=dataset.collate_fn,
         )
 
-        # 🔥 调用对应方法（使用统一的参数名：gen_length和steps）
+        # Dispatch to the method (using the unified gen_length/steps names)
         if method_name == "greedy":
             generations = evaluate_greedy(
                 model, tokenizer, dataloader,
@@ -1268,14 +1268,14 @@ if __name__ == "__main__":
                 alg_temp=args.alg_temp,
             )
 
-        # 🔥 保存结果（对齐LLaDA格式：使用gen_length和steps）
+        # Save the results in the LLaDA format (gen_length and steps)
         output_file = f"{args.output_dir}/{args.dataset}_{method_full_name}_{args.gen_length}_{args.steps}_{dist.get_rank()}_generations.json"
         
         output_data = {
             "dataset": args.dataset,
             "method": method_full_name,
             "gen_length": args.gen_length,
-            "diffusion_steps": args.steps,  # 🔥 保留Dream特有字段名，但使用args.steps
+            "diffusion_steps": args.steps,  # Dream-specific field name, fed from args.steps
             "rank": dist.get_rank(),
             "world_size": dist.get_world_size(),
             "generations": generations,
@@ -1285,13 +1285,13 @@ if __name__ == "__main__":
             json.dump(output_data, f, indent=2)
         
         if dist.get_rank() == 0:
-            print(f"✓ Saved: {output_file}")
+            print(f"[OK] Saved: {output_file}")
         
-        # 🔥 添加barrier确保所有rank完成
+        # Barrier so that every rank finishes together
         if dist.get_world_size() > 1:
             dist.barrier()
     
-    # 🔥 注意：删除原来的merge_distributed_results调用
-    # 验证和合并统一在parse阶段完成
+    # Note: the merge_distributed_results call was removed on purpose;
+    # verification and merging both happen in the parse stage
 
     cleanup_ddp()

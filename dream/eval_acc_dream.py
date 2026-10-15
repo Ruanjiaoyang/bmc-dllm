@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Dream模型简化评估脚本 - 只评估准确率，无BMC
-支持多GPU并行评估
-🔥 修复版：使用与 eval_bmc_dream.py 完全一致的 prompt 格式
+Simplified evaluation script for the Dream model - accuracy only, no BMC.
+Supports multi-GPU parallel evaluation.
+Uses exactly the same prompt format as eval_bmc_dream.py.
 """
 import argparse
 import json
@@ -19,16 +19,16 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel
 from datasets import load_dataset
 
-# 添加当前目录到路径
+# Add the current directory to the import path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)
 
-# 导入答案提取和验证工具
+# Import the answer extraction and validation helpers
 from lm_eval.bmc.task_utils import AnswerExtractor, AnswerValidator
 
 
 def init_seed(seed):
-    """初始化随机种子"""
+    """Initialize the random seeds."""
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
@@ -38,7 +38,7 @@ def init_seed(seed):
 
 
 def setup_ddp():
-    """设置分布式训练"""
+    """Set up distributed training."""
     dist.init_process_group("nccl")
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
@@ -46,12 +46,12 @@ def setup_ddp():
 
 
 def cleanup_ddp():
-    """清理分布式训练"""
+    """Tear down distributed training."""
     dist.destroy_process_group()
 
 
 class CustomDistributedSampler(DistributedSampler):
-    """自定义分布式采样器"""
+    """Custom distributed sampler."""
 
     def __init__(
         self,
@@ -93,11 +93,11 @@ class CustomDistributedSampler(DistributedSampler):
 
 
 # ============================================================
-# 数据集定义 - 🔥 修复版：使用 chat template + system prompt
+# Dataset definitions - chat template + system prompt
 # ============================================================
 
 class GSM8KDataset(Dataset):
-    """GSM8K数据集 - 使用chat template和<reasoning>格式"""
+    """GSM8K dataset - uses the chat template and the <reasoning> format."""
     
     def __init__(self, tokenizer, subsample=-1):
         self.tokenizer = tokenizer
@@ -106,7 +106,7 @@ class GSM8KDataset(Dataset):
         if subsample > 0:
             self.data = self.data.select(range(min(subsample, len(self.data))))
         
-        # 🔥 System prompt（与 BMC 脚本完全一致）
+        # System prompt (identical to the BMC script)
         self.system_prompt = """You are a math expert. You will be given a question to solve. Solve it step by step. Wrap the final answer in a \\boxed{}. 
 Respond in the following format:
 <reasoning>
@@ -124,7 +124,7 @@ Your reasoning here
         question = item["question"]
         answer = item["answer"].split("####")[-1].strip()
         
-        # 🔥 使用 chat template（与 BMC 脚本完全一致）
+        # Apply the chat template (identical to the BMC script)
         messages = [{
             "role": "user",
             "content": self.system_prompt + "\n\n" + question
@@ -134,7 +134,7 @@ Your reasoning here
             tokenize=False,
             add_generation_prompt=True
         )
-        # 🔥 添加<reasoning>标签引导模型生成
+        # Append the <reasoning> tag to steer the generation
         prompt += "<reasoning>"
         
         return {
@@ -166,7 +166,7 @@ Your reasoning here
 
 
 class MATH500Dataset(Dataset):
-    """MATH500数学推理数据集 - 使用chat template和<reasoning>格式"""
+    """MATH500 math reasoning dataset - uses the chat template and the <reasoning> format."""
     
     def __init__(self, tokenizer, subsample=-1):
         self.tokenizer = tokenizer
@@ -175,7 +175,7 @@ class MATH500Dataset(Dataset):
         if subsample > 0:
             self.data = self.data.select(range(min(subsample, len(self.data))))
         
-        # 🔥 System prompt（与 BMC 脚本完全一致）
+        # System prompt (identical to the BMC script)
         self.system_prompt = """You are a math expert. You will be given a question to solve. Solve it step by step. Wrap the final answer in a \\boxed{}.
 Respond in the following format:
 <reasoning>
@@ -193,7 +193,7 @@ Your reasoning here
         question = item["problem"]
         answer = item["answer"]
         
-        # 🔥 使用 chat template（与 BMC 脚本完全一致）
+        # Apply the chat template (identical to the BMC script)
         messages = [{
             "role": "user",
             "content": self.system_prompt + "\n\n" + question
@@ -203,7 +203,7 @@ Your reasoning here
             tokenize=False,
             add_generation_prompt=True
         )
-        # 🔥 添加<reasoning>标签引导模型生成
+        # Append the <reasoning> tag to steer the generation
         prompt += "<reasoning>"
         
         return {
@@ -235,13 +235,13 @@ Your reasoning here
 
 
 class GPQADataset(Dataset):
-    """GPQA研究生级别科学问答数据集 - 使用chat template和<reasoning>格式"""
+    """GPQA graduate-level science QA dataset - uses the chat template and the <reasoning> format."""
     
     def __init__(self, tokenizer, subsample=-1, subset="main"):
         self.tokenizer = tokenizer
         self.subset = subset
         
-        # 🔥 System prompt（与 BMC 脚本完全一致）
+        # System prompt (identical to the BMC script)
         self.system_prompt = """You are an expert in graduate-level science (physics, chemistry, biology). You will be given a multiple-choice question with 4 options (A, B, C, D).
 
 These questions are designed to be challenging and require:
@@ -279,7 +279,7 @@ Where X is one of: A, B, C, or D"""
         return len(self.data)
     
     def format_question_with_choices(self, item):
-        """格式化多选题（与 BMC 脚本完全一致）"""
+        """Format a multiple-choice question (identical to the BMC script)."""
         question = item.get("Question", item.get("question", ""))
         
         all_choices = [
@@ -306,7 +306,7 @@ Where X is one of: A, B, C, or D"""
         item = self.data[idx]
         formatted_question, answer = self.format_question_with_choices(item)
         
-        # 🔥 使用 chat template（与 BMC 脚本完全一致）
+        # Apply the chat template (identical to the BMC script)
         messages = [{
             "role": "user",
             "content": self.system_prompt + "\n\n" + formatted_question
@@ -316,7 +316,7 @@ Where X is one of: A, B, C, or D"""
             tokenize=False,
             add_generation_prompt=True
         )
-        # 🔥 添加<reasoning>标签引导模型生成
+        # Append the <reasoning> tag to steer the generation
         prompt += "<reasoning>"
         
         return {
@@ -348,12 +348,12 @@ Where X is one of: A, B, C, or D"""
 
 
 class ARCDataset(Dataset):
-    """ARC-Challenge科学问答数据集 - 使用chat template和<reasoning>格式"""
+    """ARC-Challenge science QA dataset - uses the chat template and the <reasoning> format."""
     
     def __init__(self, tokenizer, subsample=-1):
         self.tokenizer = tokenizer
         
-        # 🔥 System prompt（与 BMC 脚本完全一致）
+        # System prompt (identical to the BMC script)
         self.system_prompt = """You are an expert in science reasoning.
 You will be given a multiple-choice question with options (A, B, C, D, or E).
 
@@ -379,7 +379,7 @@ Where X is one of the available options (A, B, C, D, or E)"""
         return len(self.data)
     
     def format_question_with_choices(self, item):
-        """格式化多选题（与 BMC 脚本完全一致）"""
+        """Format a multiple-choice question (identical to the BMC script)."""
         question = item.get("question", "")
         choices = item.get("choices", {})
         correct_answer = item.get("answerKey", "")
@@ -411,7 +411,7 @@ Where X is one of the available options (A, B, C, D, or E)"""
         item = self.data[idx]
         formatted_question, answer = self.format_question_with_choices(item)
         
-        # 🔥 使用 chat template（与 BMC 脚本完全一致）
+        # Apply the chat template (identical to the BMC script)
         messages = [{
             "role": "user",
             "content": self.system_prompt + "\n\n" + formatted_question
@@ -421,7 +421,7 @@ Where X is one of the available options (A, B, C, D, or E)"""
             tokenize=False,
             add_generation_prompt=True
         )
-        # 🔥 添加<reasoning>标签引导模型生成
+        # Append the <reasoning> tag to steer the generation
         prompt += "<reasoning>"
         
         return {
@@ -453,11 +453,11 @@ Where X is one of the available options (A, B, C, D, or E)"""
 
 
 # ============================================================
-# 答案提取和验证
+# Answer extraction and validation
 # ============================================================
 
 def extract_answer(text, task_name):
-    """从生成的文本中提取答案"""
+    """Extract the answer from the generated text."""
     try:
         if task_name == "gsm8k":
             return AnswerExtractor.extract_gsm8k(text)
@@ -474,7 +474,7 @@ def extract_answer(text, task_name):
 
 
 def validate_answer(generated_answer, gt_answer, task_name, question=None):
-    """验证答案是否正确"""
+    """Check whether the answer is correct."""
     try:
         if task_name == "gsm8k":
             is_correct, _ = AnswerValidator.validate_gsm8k(generated_answer, gt_answer)
@@ -490,12 +490,12 @@ def validate_answer(generated_answer, gt_answer, task_name, question=None):
         return bool(is_correct)
     except Exception as e:
         if dist.get_rank() == 0:
-            print(f"⚠️  Validation error: {e}")
+            print(f"[WARN] Validation error: {e}")
         return False
 
 
 # ============================================================
-# 评估函数
+# Evaluation
 # ============================================================
 
 def evaluate(
@@ -509,7 +509,7 @@ def evaluate(
     diffusion_steps=64,
     alg="entropy",
 ):
-    """评估函数"""
+    """Run the evaluation."""
     model.eval()
     
     all_results = []
@@ -525,7 +525,7 @@ def evaluate(
         questions = batch["questions"]
         prompts = batch["prompts"]
         
-        # 使用Dream模型生成
+        # Generate with the Dream model
         generation_output = model.diffusion_generate(
             input_ids,
             attention_mask=attention_mask,
@@ -538,7 +538,7 @@ def evaluate(
             output_history=False,
         )
         
-        # 解码生成文本
+        # Decode the generated text
         generated_texts = []
         for i, (prompt_ids, gen_ids) in enumerate(zip(input_ids, generation_output.sequences)):
             actual_prompt_len = (prompt_ids != tokenizer.pad_token_id).sum().item()
@@ -548,7 +548,7 @@ def evaluate(
             )
             generated_texts.append(gen_text)
         
-        # 提取答案并验证
+        # Extract the answers and validate them
         for j in range(len(gt_answers)):
             generated_answer = extract_answer(generated_texts[j], task_name)
             gt_answer = gt_answers[j]
@@ -570,7 +570,7 @@ def evaluate(
             
             all_results.append(result)
         
-        # 打印示例
+        # Print a sample
         if dist.get_rank() == 0 and len(questions) > 0:
             idx = random.randint(0, len(questions) - 1)
             print(f"\n{'='*60}")
@@ -581,12 +581,12 @@ def evaluate(
             print(f"Is correct: {all_results[-len(questions) + idx]['is_correct']}")
             print(f"{'='*60}\n")
     
-    # 计算准确率
+    # Compute the accuracy
     accuracy = total_correct / total_samples if total_samples > 0 else 0.0
     
     if dist.get_rank() == 0:
         print(f"\n{'='*60}")
-        print(f"📊 Task: {task_name.upper()}")
+        print(f"Task: {task_name.upper()}")
         print(f"  Total: {total_samples}")
         print(f"  Correct: {total_correct}")
         print(f"  Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
@@ -601,7 +601,7 @@ def evaluate(
 
 
 # ============================================================
-# 主函数
+# Main entry point
 # ============================================================
 
 if __name__ == "__main__":
@@ -626,12 +626,12 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    # 加载模型
+    # Load the model
     if dist.get_rank() == 0:
         print(f"\n{'='*60}")
         print("Loading Dream model...")
         print(f"Model: {args.model_path}")
-        print(f"🔥 Using chat template + system prompt (BMC-aligned)")
+        print(f"Using chat template + system prompt (BMC-aligned)")
         print(f"{'='*60}\n")
     
     model = AutoModel.from_pretrained(
@@ -645,7 +645,7 @@ if __name__ == "__main__":
         trust_remote_code=True
     )
     
-    # 准备数据集
+    # Prepare the dataset
     if args.dataset == "gsm8k":
         dataset = GSM8KDataset(tokenizer, args.subsample)
     elif args.dataset == "math":
@@ -664,10 +664,10 @@ if __name__ == "__main__":
         collate_fn=dataset.collate_fn,
     )
     
-    # 创建输出目录
+    # Create the output directory
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # 运行评估
+    # Run the evaluation
     metrics = evaluate(
         model,
         tokenizer,
@@ -680,7 +680,7 @@ if __name__ == "__main__":
         alg=args.alg,
     )
     
-    # 保存结果
+    # Save the results
     filename = f"{args.output_dir}/{args.dataset}_len{args.gen_length}_{dist.get_rank()}_results.json"
     
     with open(filename, "w") as f:
@@ -699,11 +699,11 @@ if __name__ == "__main__":
                 "temperature": args.temperature,
                 "top_p": args.top_p,
                 "alg": args.alg,
-                "prompt_format": "chat_template_with_reasoning_tag",  # 🔥 标记使用的格式
+                "prompt_format": "chat_template_with_reasoning_tag",  # records the prompt format used
             }
         }, f, indent=2)
     
     if dist.get_rank() == 0:
-        print(f"✓ Results saved to: {filename}")
+        print(f"[OK] Results saved to: {filename}")
     
     cleanup_ddp()

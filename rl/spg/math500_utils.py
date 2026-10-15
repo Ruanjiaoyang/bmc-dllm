@@ -197,7 +197,7 @@ def strip_string(string):
 
     # remove percentage
     string = string.replace("\\%", "")
-    string = string.replace("\%", "")  # noqa: W605
+    string = string.replace(r"\%", "")
 
     # " 0." equivalent to " ." and "{0." equivalent to "{." Alternatively, add "0" if "." is the start of the string
     string = string.replace(" .", " 0.")
@@ -244,7 +244,7 @@ def create_few_shot_prompt_math(dataset, num_examples=4):
         formatted_examples.append(f"Question: {input_text}\nAnswer:\n{answer}")
 
     # prompt = "You are given examples of math questions and answer, and in the end you will be given a new question to solve. Solve it step by step. Wrap the answer in a \\boxed\{\}. \n\n"
-    prompt = "You are a math expert. You will be given a question to solve. Solve it step by step. Wrap the final answer in a \\boxed\{\}. \n\n"
+    prompt = "You are a math expert. You will be given a question to solve. Solve it step by step. Wrap the final answer in a \\boxed\\{\\}. \n\n"
     return prompt + "\n\n".join(formatted_examples)
 
 

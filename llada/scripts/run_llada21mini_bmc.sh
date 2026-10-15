@@ -41,7 +41,7 @@ DEFAULT_NUM_REVERSE_STEPS=5
 # ============================================================
 show_help() {
     cat << EOF
-🚀 LLaDA2.1-mini BMC Evaluation Script
+LLaDA2.1-mini BMC Evaluation Script
 
 Usage: $0 [OPTIONS]
 
@@ -181,7 +181,7 @@ while [[ $# -gt 0 ]]; do
         --countdown-jsonl)
             COUNTDOWN_JSONL="$2"; shift 2 ;;
         *)
-            echo "❌ Unknown option: $1"
+            echo "[ERROR] Unknown option: $1"
             echo "Use -h or --help"
             exit 1 ;;
     esac
@@ -192,7 +192,7 @@ done
 # ============================================================
 VALID_TASKS=("gsm8k" "math" "sudoku" "countdown" "humaneval" "mbpp" "aime" "olympic" "gpqa" "logiqa" "arc")
 if [[ ! " ${VALID_TASKS[@]} " =~ " ${TASK} " ]]; then
-    echo "❌ Invalid task: $TASK"
+    echo "[ERROR] Invalid task: $TASK"
     echo "Valid tasks: ${VALID_TASKS[@]}"
     exit 1
 fi
@@ -257,7 +257,7 @@ fi
 # ============================================================
 echo ""
 echo "========================================================================"
-echo "🚀 LLaDA2.1-mini BMC Evaluation"
+echo "LLaDA2.1-mini BMC Evaluation"
 echo "========================================================================"
 echo "Task:              $TASK"
 echo "GPUs:              $GPU_IDS (nproc_per_node=$NUM_GPUS)"
@@ -283,14 +283,14 @@ echo ""
 
 if [ "$SKIP_BMC" = false ]; then
     if [ ! -f "$SEMANTIC_MODEL_PATH/config.json" ]; then
-        echo "❌ Semantic model path not found: $SEMANTIC_MODEL_PATH"
+        echo "[ERROR] Semantic model path not found: $SEMANTIC_MODEL_PATH"
         echo "Tip: Use --skip-bmc if you don't need BMC evaluation"
         exit 1
     fi
 fi
 
 if [ ! -d "$MODEL_PATH" ]; then
-    echo "❌ Model path not found: $MODEL_PATH"
+    echo "[ERROR] Model path not found: $MODEL_PATH"
     echo "Tip: Download LLaDA2.1-mini from HuggingFace first"
     exit 1
 fi
@@ -315,7 +315,7 @@ EXIT_CODE=$?
 if [ $EXIT_CODE -eq 0 ]; then
     echo ""
     echo "========================================================================"
-    echo "✅ Evaluation completed successfully!"
+    echo "[OK] Evaluation completed successfully!"
     echo "========================================================================"
     echo ""
     echo "Results saved to: $OUTPUT_DIR"
@@ -325,6 +325,6 @@ if [ $EXIT_CODE -eq 0 ]; then
 else
     echo ""
     echo "========================================================================"
-    echo "❌ Evaluation failed with exit code: $EXIT_CODE"
+    echo "[ERROR] Evaluation failed with exit code: $EXIT_CODE"
     echo "========================================================================"
 fi

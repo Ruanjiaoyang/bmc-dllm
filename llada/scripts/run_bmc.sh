@@ -3,8 +3,8 @@
 cd "$(dirname "$0")/.."
 
 # ============================================================
-# 🚀 BMC V2 Evaluation Script - Flexible Configuration
-# 支持: GSM8K, MATH500, Sudoku, Countdown, HumanEval, MBPP, AIME, Olympic, GPQA
+# BMC V2 Evaluation Script - Flexible Configuration
+# Supports: GSM8K, MATH500, Sudoku, Countdown, HumanEval, MBPP, AIME, Olympic, GPQA
 # ============================================================
 
 # ============================================================
@@ -32,7 +32,7 @@ DEFAULT_NUM_SAMPLES=4
 # ============================================================
 show_help() {
     cat << EOF
-🚀 BMC V2 Evaluation Script
+BMC V2 Evaluation Script
 
 Usage: $0 [OPTIONS]
 
@@ -203,7 +203,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         *)
-            echo "❌ Unknown option: $1"
+            echo "[ERROR] Unknown option: $1"
             echo "Use -h or --help for usage information"
             exit 1
             ;;
@@ -215,7 +215,7 @@ done
 # ============================================================
 VALID_TASKS=("gsm8k" "math" "sudoku" "countdown" "humaneval" "mbpp" "aime" "olympic" "gpqa" "logiqa" "arc")
 if [[ ! " ${VALID_TASKS[@]} " =~ " ${TASK} " ]]; then
-    echo "❌ Invalid task: $TASK"
+    echo "[ERROR] Invalid task: $TASK"
     echo "Valid tasks: ${VALID_TASKS[@]}"
     exit 1
 fi
@@ -230,7 +230,7 @@ NUM_GPUS=${#GPU_ARRAY[@]}
 # Print Configuration
 # ============================================================
 echo "========================================================================"
-echo "🚀 BMC V2 Evaluation"
+echo "BMC V2 Evaluation"
 echo "========================================================================"
 echo "Task:              $TASK"
 echo "GPUs:              $GPU_IDS (nproc_per_node=$NUM_GPUS)"
@@ -263,18 +263,18 @@ echo "========================================================================"
 # Validate Paths
 # ============================================================
 if [ ! -d "$MODEL_PATH" ]; then
-    echo "❌ Model path not found: $MODEL_PATH"
+    echo "[ERROR] Model path not found: $MODEL_PATH"
     exit 1
 fi
 
 if [ "$SKIP_BMC" = false ] && [ ! -d "$SEMANTIC_MODEL_PATH" ]; then
-    echo "❌ Semantic model path not found: $SEMANTIC_MODEL_PATH"
+    echo "[ERROR] Semantic model path not found: $SEMANTIC_MODEL_PATH"
     echo "Tip: Use --skip-bmc if you don't need BMC evaluation"
     exit 1
 fi
 
 if [ -n "$OPTIMIZED_WEIGHTS" ] && [ ! -f "$OPTIMIZED_WEIGHTS" ]; then
-    echo "⚠️  Warning: Optimized weights file not found: $OPTIMIZED_WEIGHTS"
+    echo "[WARN] Optimized weights file not found: $OPTIMIZED_WEIGHTS"
     echo "Continuing without optimized weights..."
     OPTIMIZED_WEIGHTS=""
 fi
@@ -359,9 +359,9 @@ EXIT_CODE=$?
 echo ""
 echo "========================================================================"
 if [ $EXIT_CODE -eq 0 ]; then
-    echo "✅ Evaluation completed successfully!"
+    echo "[OK] Evaluation completed successfully!"
 else
-    echo "❌ Evaluation failed with exit code: $EXIT_CODE"
+    echo "[ERROR] Evaluation failed with exit code: $EXIT_CODE"
 fi
 echo "========================================================================"
 echo "Results saved to: $OUTPUT_DIR"

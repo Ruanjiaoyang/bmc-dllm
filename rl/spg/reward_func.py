@@ -264,7 +264,7 @@ def correctness_reward_func_math(
         "-" * 20,
         f"\n{YELLOW}Extracted:{RESET}\n{extracted_responses[0]}",
     )
-    print("✅" if is_equiv(extracted_responses[0], answer[0]) else "❌")
+    print("[CORRECT]" if is_equiv(extracted_responses[0], answer[0]) else "[INCORRECT]")
 
     return [2.0 if is_equiv(r, a) else 0.0 for r, a in zip(extracted_responses, answer)]
 
@@ -283,45 +283,45 @@ def boxed_and_answer_tags_format_reward(
 
 # Global BMC probe instance (initialized once during training)
 _bmc_probe = None
-_bmc_training_config = None  # 存储训练配置（如total_steps）
+_bmc_training_config = None  # training configuration (e.g. total_steps) captured at init
 
 
 def initialize_bmc_probe(model, tokenizer, device="cuda", training_config=None, task_name=None, **bmc_kwargs):
     """
-    初始化BMC探针（在训练开始前调用一次）
+    Initialize the BMC probe. Call once before training starts.
     
     Args:
-        model: LLaDA模型
+        model: LLaDA model
         tokenizer: Tokenizer
-        device: 运行设备
-        training_config: 训练配置字典，包含：
-            - total_steps: 总训练步数（用于计算training_progress）
-            - num_epochs: 训练轮数
-            - dataset_size: 数据集大小
-            - dataset: 数据集名称（用于自动推断task_name）
-        task_name: 任务名称（如 'gsm8k', 'math', 'olympic', 'gpqa'）
-                   如果未指定，会从 training_config['dataset'] 自动推断
-        **bmc_kwargs: BMC探针的其他参数，例如：
-            - semantic_model_path: 语义编码器路径
-            - adaptive_t: 是否使用自适应t_probe
-            - num_samples: 重复采样次数
-            - aggressive_scoring: 是否使用激进评分
-            - optimized_weights: 优化后的权重字典
+        device: Device the probe runs on
+        training_config: Training configuration dict containing:
+            - total_steps: total number of training steps (used for training_progress)
+            - num_epochs: number of training epochs
+            - dataset_size: number of training examples
+            - dataset: dataset name (used to infer task_name automatically)
+        task_name: Task name, e.g. 'gsm8k', 'math', 'olympic', 'gpqa'.
+                   If omitted, it is inferred from training_config['dataset'].
+        **bmc_kwargs: Additional BMC probe arguments, for example:
+            - semantic_model_path: path to the semantic encoder
+            - adaptive_t: whether to use an adaptive t_probe
+            - num_samples: number of repeated samples
+            - aggressive_scoring: whether to use aggressive scoring
+            - optimized_weights: dict of optimized metric weights
     
     Returns:
-        BMC探针实例
+        The BMC probe instance
     """
     global _bmc_probe, _bmc_training_config
     
-    # 存储训练配置
+    # Store the training configuration
     _bmc_training_config = training_config or {}
     
-    # 🔥 自动推断任务名称
+    # Infer the task name automatically
     if task_name is None and training_config:
         dataset_name = training_config.get('dataset', 'gsm8k')
-        # 🔥 数据集名称映射到任务名称（处理命名差异）
+        # Map dataset names onto task names (the two do not always match)
         dataset_to_task_mapping = {
-            'olympic': 'olympiad',  # olympic 数据集 -> olympiad 任务类型
+            'olympic': 'olympiad',  # the olympic dataset uses the olympiad task type
             'gsm8k': 'gsm8k',
             'math': 'math',
             'gpqa': 'gpqa',
@@ -330,11 +330,11 @@ def initialize_bmc_probe(model, tokenizer, device="cuda", training_config=None, 
         task_name = dataset_to_task_mapping.get(dataset_name.lower(), dataset_name.lower())
     
     if task_name is None:
-        task_name = 'gsm8k'  # 默认值
+        task_name = 'gsm8k'  # default
     
-    print(f"🔥 初始化BMC探针 - 任务类型: {task_name}")
+    print(f"[INFO] Initializing BMC probe - task type: {task_name}")
     
-    # 导入BMC核心模块
+    # Import the BMC core module
     import sys
     import os
     # The BMC estimator is shared with the LLaDA experiments: <repo>/llada/bmc_core.py
@@ -342,28 +342,27 @@ def initialize_bmc_probe(model, tokenizer, device="cuda", training_config=None, 
     if bmc_path not in sys.path:
         sys.path.insert(0, bmc_path)
     
-    # 🔥 使用 V3 版本
     from bmc_core import BMCEstimator
     
-    # 初始化BMC探针
+    # Instantiate the BMC probe
     _bmc_probe = BMCEstimator(
         model=model,
         tokenizer=tokenizer,
         device=device,
-        task_name=task_name,  # 🔥 动态设置任务名称
+        task_name=task_name,  # task type is resolved at runtime
         **bmc_kwargs
     )
     
-    print(f"✅ BMC探针初始化成功 (任务: {task_name})")
+    print(f"[OK] BMC probe initialized (task: {task_name})")
     return _bmc_probe
 
 
 def get_bmc_probe():
-    """获取全局BMC探针实例"""
+    """Return the global BMC probe instance."""
     global _bmc_probe
     if _bmc_probe is None:
         raise RuntimeError(
-            "BMC探针未初始化！请在训练开始前调用 initialize_bmc_probe() 函数。"
+            "BMC probe is not initialized. Call initialize_bmc_probe() before training starts."
         )
     return _bmc_probe
 
@@ -378,52 +377,52 @@ def bmc_reward_gsm8k(
     **kwargs
 ) -> list[float]:
     """
-    BMC增强的GSM8K奖励函数
+    BMC-augmented reward function for GSM8K.
     
-    奖励公式：
-        if 答案正确:
+    Reward:
+        if the answer is correct:
             R = 1.5 + alpha × BMC_score
-            alpha = 0.5 + 0.5 × training_progress  (从0.5增长到1.0)
-            奖励范围: [1.5, 2.5]
+            alpha = 0.5 + 0.5 × training_progress  (grows from 0.5 to 1.0)
+            reward range: [1.5, 2.5]
         else:
-            R = 0.0  # 严格遵循SPG原始设计
+            R = 0.0  # matches the original SPG design
     
-    关键原则：
-        ✅ 只在正确答案中使用BMC信号：提供5倍区分度（正确+高BMC vs 错误）
-        ✅ 正确答案高基础分：即使BMC=0也有1.5分，确保正确性是主要优化目标
-        ✅ BMC权重渐进增长：训练初期(0.5)重正确性，后期(1.0)强化逻辑一致性
-        ✅ 错误答案=0：与SPG的GSM8K原始设计一致，训练稳定有保障
+    Design notes:
+        - BMC only modulates correct answers, giving a 5x spread between a correct, high-BMC rollout and a wrong one.
+        - Correct answers keep a high base reward: even at BMC=0 they score 1.5, so correctness remains the primary objective.
+        - The BMC weight is annealed upward: early training (0.5) favours correctness, later training (1.0) reinforces logical consistency.
+        - Incorrect answers score 0, matching the original SPG GSM8K design and keeping training stable.
     
     Args:
-        prompts: 问题列表
-        completions: 生成的答案列表
-        answer: 正确答案列表
-        step: 当前训练步数
-        run_name: 运行名称
-        total_steps: 总训练步数（用于计算training_progress）
-        **kwargs: 其他参数
+        prompts: list of questions
+        completions: list of generated answers
+        answer: list of ground-truth answers
+        step: current training step
+        run_name: name of the run
+        total_steps: total number of training steps (used for training_progress)
+        **kwargs: additional arguments
     
     Returns:
-        奖励列表
+        List of rewards
     """
-    # 获取BMC探针
+    # Fetch the BMC probe
     try:
         bmc_probe = get_bmc_probe()
     except RuntimeError as e:
-        print(f"⚠️  警告: {e}")
-        print("⚠️  回退到标准的correctness_reward_func")
-        # 回退到标准奖励函数
+        print(f"[WARN] {e}")
+        print("[WARN] Falling back to the standard correctness_reward_func")
+        # Fall back to the standard reward function
         return [2.0 if extract_hash_answer(completion[0]["content"]) == a else 0.0 
                 for completion, a in zip(completions, answer)]
     
-    # 提取响应文本
+    # Extract the response text
     responses = [completion[0]["content"] for completion in completions]
     
-    # 提取答案
+    # Extract the answers
     extracted_responses = [extract_hash_answer(r) for r in responses]
     
-    # 计算training_progress
-    # 优先使用传入的total_steps，否则从全局配置中获取
+    # Compute training_progress
+    # Prefer the total_steps argument, otherwise read it from the global config
     global _bmc_training_config
     
     if total_steps is None and _bmc_training_config:
@@ -432,55 +431,55 @@ def bmc_reward_gsm8k(
     if step is not None and total_steps is not None and total_steps > 0:
         training_progress = min(1.0, step / total_steps)
     else:
-        training_progress = 0.5  # 默认使用中间值
+        training_progress = 0.5  # default to the midpoint
     
-    # 计算alpha（从0.5增长到1.0）
+    # Compute alpha (grows from 0.5 to 1.0)
     alpha = 0.5 + 0.5 * training_progress
     
-    # 计算每个样本的奖励
+    # Compute the reward for each sample
     rewards = []
     for i, (response, extracted, gt_answer) in enumerate(zip(responses, extracted_responses, answer)):
-        # 判断答案是否正确
+        # Check whether the answer is correct
         is_correct = (extracted == gt_answer)
         
         if is_correct:
-            # ✅ 答案正确：计算BMC分数
+            # Correct answer: compute the BMC score
             try:
-                # 构建完整的问题和答案文本
+                # Build the full question and answer text
                 question = prompts[i][-1]["content"] if isinstance(prompts[i], list) else prompts[i]
                 
-                # 使用BMC探针计算一致性分数
+                # Score bidirectional consistency with the BMC probe
                 bmc_result = bmc_probe.probe(
                     question=question,
                     answer=response,
-                    t_probe=0.9,  # 可以根据需要调整
+                    t_probe=0.9,  # tune if needed
                     num_reverse_steps=5,
                     return_details=False
                 )
                 
                 bmc_score = bmc_result.get('consistency_score', 0.0)
                 
-                # 计算最终奖励：1.5 + alpha × BMC_score
+                # Final reward: 1.5 + alpha × BMC_score
                 reward = 1.5 + alpha * bmc_score
                 
-                # 确保奖励在合理范围内 [1.5, 2.5]
+                # Keep the reward inside [1.5, 2.5]
                 reward = np.clip(reward, 1.5, 2.5)
                 
-                # 调试输出（随机采样）
-                if np.random.rand() < 0.1:  # 10%的概率打印
-                    print(f"✅ 正确答案 | BMC={bmc_score:.3f} | alpha={alpha:.3f} | Reward={reward:.3f}")
+                # Debug output on a random subsample
+                if np.random.rand() < 0.1:  # print 10% of the time
+                    print(f"[OK] Correct | BMC={bmc_score:.3f} | alpha={alpha:.3f} | Reward={reward:.3f}")
                 
             except Exception as e:
-                # 如果BMC计算失败，使用基础奖励
-                print(f"⚠️  BMC计算失败: {e}")
+                # Fall back to the base reward if the BMC computation fails
+                print(f"[WARN] BMC computation failed: {e}")
                 reward = 1.5
         else:
-            # ❌ 答案错误：奖励为0（严格遵循SPG原始设计）
+            # Incorrect answer: zero reward, as in the original SPG design
             reward = 0.0
         
         rewards.append(reward)
     
-    # 打印统计信息（每100步打印一次）
+    # Print statistics every 100 steps
     if step is not None and step % 100 == 0:
         correct_count = sum(1 for r in rewards if r > 0)
         avg_reward = np.mean(rewards) if rewards else 0.0
@@ -509,42 +508,42 @@ def bmc_reward_math(
     **kwargs
 ) -> list[float]:
     """
-    BMC增强的MATH任务奖励函数
+    BMC-augmented reward function for the MATH task.
     
-    奖励公式：
-        if 答案正确:
+    Reward:
+        if the answer is correct:
             R = 1.5 + alpha × BMC_score
-            alpha = 0.5 + 0.5 × training_progress  (从0.5增长到1.0)
-            奖励范围: [1.5, 2.5]
+            alpha = 0.5 + 0.5 × training_progress  (grows from 0.5 to 1.0)
+            reward range: [1.5, 2.5]
         else:
-            R = 0.0  # 严格遵循SPG原始设计
+            R = 0.0  # matches the original SPG design
     
-    关键原则：
-        ✅ 只在正确答案中使用BMC信号：提供5倍区分度（正确+高BMC vs 错误）
-        ✅ 正确答案高基础分：即使BMC=0也有1.5分，确保正确性是主要优化目标
-        ✅ BMC权重渐进增长：训练初期(0.5)重正确性，后期(1.0)强化逻辑一致性
-        ✅ 错误答案=0：与SPG的MATH原始设计一致，训练稳定有保障
+    Design notes:
+        - BMC only modulates correct answers, giving a 5x spread between a correct, high-BMC rollout and a wrong one.
+        - Correct answers keep a high base reward: even at BMC=0 they score 1.5, so correctness remains the primary objective.
+        - The BMC weight is annealed upward: early training (0.5) favours correctness, later training (1.0) reinforces logical consistency.
+        - Incorrect answers score 0, matching the original SPG MATH design and keeping training stable.
     
     Args:
-        prompts: 问题列表
-        completions: 生成的答案列表
-        answer: 正确答案列表
-        step: 当前训练步数
-        run_name: 运行名称
-        total_steps: 总训练步数（用于计算training_progress）
-        **kwargs: 其他参数
+        prompts: list of questions
+        completions: list of generated answers
+        answer: list of ground-truth answers
+        step: current training step
+        run_name: name of the run
+        total_steps: total number of training steps (used for training_progress)
+        **kwargs: additional arguments
     
     Returns:
-        奖励列表
+        List of rewards
     """
-    # 获取BMC探针
+    # Fetch the BMC probe
     try:
         bmc_probe = get_bmc_probe()
     except RuntimeError as e:
-        print(f"⚠️  警告: {e}")
-        print("⚠️  回退到标准的correctness_reward_func_math")
-        # 回退到标准奖励函数
-        # 处理MATH任务的答案格式
+        print(f"[WARN] {e}")
+        print("[WARN] Falling back to the standard correctness_reward_func_math")
+        # Fall back to the standard reward function
+        # Handle the MATH answer format
         responses = [completion[0]["content"] for completion in completions]
         extracted_responses = []
         processed_answer = [remove_boxed(last_boxed_only_string(a)) for a in answer]
@@ -556,10 +555,10 @@ def bmc_reward_math(
             extracted_responses.append(r)
         return [2.0 if is_equiv(r, a) else 0.0 for r, a in zip(extracted_responses, processed_answer)]
     
-    # 提取响应文本
+    # Extract the response text
     responses = [completion[0]["content"] for completion in completions]
     
-    # 提取答案（MATH任务使用boxed格式）
+    # Extract the answers (MATH uses the boxed format)
     extracted_responses = []
     processed_answer = [remove_boxed(last_boxed_only_string(a)) for a in answer]
     for r in responses:
@@ -569,8 +568,8 @@ def bmc_reward_math(
             pass
         extracted_responses.append(r)
     
-    # 计算training_progress
-    # 优先使用传入的total_steps，否则从全局配置中获取
+    # Compute training_progress
+    # Prefer the total_steps argument, otherwise read it from the global config
     global _bmc_training_config
     
     if total_steps is None and _bmc_training_config:
@@ -579,55 +578,55 @@ def bmc_reward_math(
     if step is not None and total_steps is not None and total_steps > 0:
         training_progress = min(1.0, step / total_steps)
     else:
-        training_progress = 0.5  # 默认使用中间值
+        training_progress = 0.5  # default to the midpoint
     
-    # 计算alpha（从0.5增长到1.0）
+    # Compute alpha (grows from 0.5 to 1.0)
     alpha = 0.5 + 0.5 * training_progress
     
-    # 计算每个样本的奖励
+    # Compute the reward for each sample
     rewards = []
     for i, (response, extracted, gt_answer) in enumerate(zip(responses, extracted_responses, processed_answer)):
-        # 判断答案是否正确（使用MATH任务的等价性判断）
+        # Check correctness with the MATH equivalence test
         is_correct = is_equiv(extracted, gt_answer)
         
         if is_correct:
-            # ✅ 答案正确：计算BMC分数
+            # Correct answer: compute the BMC score
             try:
-                # 构建完整的问题和答案文本
+                # Build the full question and answer text
                 question = prompts[i][-1]["content"] if isinstance(prompts[i], list) else prompts[i]
                 
-                # 使用BMC探针计算一致性分数
+                # Score bidirectional consistency with the BMC probe
                 bmc_result = bmc_probe.probe(
                     question=question,
                     answer=response,
-                    t_probe=0.9,  # 可以根据需要调整
+                    t_probe=0.9,  # tune if needed
                     num_reverse_steps=5,
                     return_details=False
                 )
                 
                 bmc_score = bmc_result.get('consistency_score', 0.0)
                 
-                # 计算最终奖励：1.5 + alpha × BMC_score
+                # Final reward: 1.5 + alpha × BMC_score
                 reward = 1.5 + alpha * bmc_score
                 
-                # 确保奖励在合理范围内 [1.5, 2.5]
+                # Keep the reward inside [1.5, 2.5]
                 reward = np.clip(reward, 1.5, 2.5)
                 
-                # 调试输出（随机采样）
-                if np.random.rand() < 0.1:  # 10%的概率打印
-                    print(f"✅ 正确答案 (MATH) | BMC={bmc_score:.3f} | alpha={alpha:.3f} | Reward={reward:.3f}")
+                # Debug output on a random subsample
+                if np.random.rand() < 0.1:  # print 10% of the time
+                    print(f"[OK] Correct (MATH) | BMC={bmc_score:.3f} | alpha={alpha:.3f} | Reward={reward:.3f}")
                 
             except Exception as e:
-                # 如果BMC计算失败，使用基础奖励
-                print(f"⚠️  BMC计算失败: {e}")
+                # Fall back to the base reward if the BMC computation fails
+                print(f"[WARN] BMC computation failed: {e}")
                 reward = 1.5
         else:
-            # ❌ 答案错误：奖励为0（严格遵循SPG原始设计）
+            # Incorrect answer: zero reward, as in the original SPG design
             reward = 0.0
         
         rewards.append(reward)
     
-    # 打印统计信息（每100步打印一次）
+    # Print statistics every 100 steps
     if step is not None and step % 100 == 0:
         correct_count = sum(1 for r in rewards if r > 0)
         avg_reward = np.mean(rewards) if rewards else 0.0
@@ -654,7 +653,7 @@ def correctness_reward_func_olympic(
     prompts, completions, answer, step=None, run_name=None, **kwargs
 ) -> list[float]:
     """
-    Olympic任务的奖励函数（使用boxed格式，类似MATH）
+    Reward function for the Olympic task (boxed format, like MATH).
     """
     responses = [completion[0]["content"] for completion in completions]
     extracted_responses = []
@@ -667,11 +666,11 @@ def correctness_reward_func_olympic(
             pass
         extracted_responses.append(r)
     
-    # 调试输出
+    # Debug output
     if np.random.rand() < 0.1:
         print(f"Olympic - Ground Truth: {processed_answer[0]}")
         print(f"Olympic - Extracted: {extracted_responses[0]}")
-        print("✅" if is_equiv(extracted_responses[0], processed_answer[0]) else "❌")
+        print("[CORRECT]" if is_equiv(extracted_responses[0], processed_answer[0]) else "[INCORRECT]")
     
     return [2.0 if is_equiv(r, a) else 0.0 for r, a in zip(extracted_responses, processed_answer)]
 
@@ -686,25 +685,25 @@ def bmc_reward_olympic(
     **kwargs
 ) -> list[float]:
     """
-    BMC增强的Olympic奖励函数
+    BMC-augmented reward function for the Olympic task.
     
-    奖励公式：
-        if 答案正确:
+    Reward:
+        if the answer is correct:
             R = 1.5 + alpha × BMC_score
             alpha = 0.5 + 0.5 × training_progress
-            奖励范围: [1.5, 2.5]
+            reward range: [1.5, 2.5]
         else:
             R = 0.0
     """
-    # 获取BMC探针
+    # Fetch the BMC probe
     try:
         bmc_probe = get_bmc_probe()
     except RuntimeError as e:
-        print(f"⚠️  警告: {e}")
-        print("⚠️  回退到标准的correctness_reward_func_olympic")
+        print(f"[WARN] {e}")
+        print("[WARN] Falling back to the standard correctness_reward_func_olympic")
         return correctness_reward_func_olympic(prompts, completions, answer, step, run_name, **kwargs)
     
-    # 提取响应和答案（使用boxed格式）
+    # Extract responses and answers (boxed format)
     responses = [completion[0]["content"] for completion in completions]
     extracted_responses = []
     processed_answer = [remove_boxed(last_boxed_only_string(a)) for a in answer]
@@ -716,7 +715,7 @@ def bmc_reward_olympic(
             pass
         extracted_responses.append(r)
     
-    # 计算training_progress
+    # Compute training_progress
     global _bmc_training_config
     if total_steps is None and _bmc_training_config:
         total_steps = _bmc_training_config.get('total_steps')
@@ -728,7 +727,7 @@ def bmc_reward_olympic(
     
     alpha = 0.5 + 0.5 * training_progress
     
-    # 计算奖励
+    # Compute the rewards
     rewards = []
     for i, (response, extracted, gt_answer) in enumerate(zip(responses, extracted_responses, processed_answer)):
         is_correct = is_equiv(extracted, gt_answer)
@@ -748,16 +747,16 @@ def bmc_reward_olympic(
                 reward = np.clip(reward, 1.5, 2.5)
                 
                 if np.random.rand() < 0.1:
-                    print(f"✅ 正确答案 (Olympic) | BMC={bmc_score:.3f} | alpha={alpha:.3f} | Reward={reward:.3f}")
+                    print(f"[OK] Correct (Olympic) | BMC={bmc_score:.3f} | alpha={alpha:.3f} | Reward={reward:.3f}")
             except Exception as e:
-                print(f"⚠️  BMC计算失败: {e}")
+                print(f"[WARN] BMC computation failed: {e}")
                 reward = 1.5
         else:
             reward = 0.0
         
         rewards.append(reward)
     
-    # 打印统计信息
+    # Print statistics
     if step is not None and step % 100 == 0:
         correct_count = sum(1 for r in rewards if r > 0)
         avg_reward = np.mean(rewards) if rewards else 0.0
@@ -781,23 +780,23 @@ def bmc_reward_olympic(
 # ============================================================================
 
 def extract_gpqa_answer(text: str) -> str:
-    """从GPQA响应中提取答案（A, B, C, D）"""
-    # 尝试从<answer>标签中提取
+    """Extract the answer letter (A, B, C or D) from a GPQA response."""
+    # Try the <answer> tag first
     answer = extract_xml_answer(text)
     
-    # 尝试从boxed中提取
+    # Then try the boxed format
     if "\\boxed{" in answer:
         try:
             answer = remove_boxed(last_boxed_only_string(answer))
         except:
             pass
     
-    # 提取单个字母（A, B, C, D）
+    # Accept a bare single letter (A, B, C, D)
     answer = answer.strip().upper()
     if len(answer) == 1 and answer in ['A', 'B', 'C', 'D']:
         return answer
     
-    # 尝试从文本中找到第一个A/B/C/D
+    # Otherwise take the first standalone A/B/C/D in the text
     match = re.search(r'\b([ABCD])\b', answer)
     if match:
         return match.group(1)
@@ -806,23 +805,23 @@ def extract_gpqa_answer(text: str) -> str:
 
 
 def extract_arc_answer(text: str) -> str:
-    """从ARC响应中提取答案（A, B, C, D, E）"""
-    # 尝试从<answer>标签中提取
+    """Extract the answer letter (A through E) from an ARC response."""
+    # Try the <answer> tag first
     answer = extract_xml_answer(text)
     
-    # 尝试从boxed中提取
+    # Then try the boxed format
     if "\\boxed{" in answer:
         try:
             answer = remove_boxed(last_boxed_only_string(answer))
         except:
             pass
     
-    # 提取单个字母（A, B, C, D, E）
+    # Accept a bare single letter (A, B, C, D, E)
     answer = answer.strip().upper()
     if len(answer) == 1 and answer in ['A', 'B', 'C', 'D', 'E']:
         return answer
     
-    # 尝试从文本中找到第一个A/B/C/D/E
+    # Otherwise take the first standalone A/B/C/D/E in the text
     match = re.search(r'\b([ABCDE])\b', answer)
     if match:
         return match.group(1)
@@ -834,16 +833,16 @@ def correctness_reward_func_gpqa(
     prompts, completions, answer, step=None, run_name=None, **kwargs
 ) -> list[float]:
     """
-    GPQA任务的奖励函数（多选题格式）
+    Reward function for GPQA (multiple-choice format).
     """
     responses = [completion[0]["content"] for completion in completions]
     extracted_responses = [extract_gpqa_answer(r) for r in responses]
     
-    # 调试输出
+    # Debug output
     if np.random.rand() < 0.1:
         print(f"GPQA - Ground Truth: {answer[0]}")
         print(f"GPQA - Extracted: {extracted_responses[0]}")
-        print("✅" if extracted_responses[0] == answer[0] else "❌")
+        print("[CORRECT]" if extracted_responses[0] == answer[0] else "[INCORRECT]")
     
     return [2.0 if r == a else 0.0 for r, a in zip(extracted_responses, answer)]
 
@@ -858,29 +857,29 @@ def bmc_reward_gpqa(
     **kwargs
 ) -> list[float]:
     """
-    BMC增强的GPQA奖励函数
+    BMC-augmented reward function for GPQA.
     
-    奖励公式：
-        if 答案正确:
+    Reward:
+        if the answer is correct:
             R = 1.5 + alpha × BMC_score
             alpha = 0.5 + 0.5 × training_progress
-            奖励范围: [1.5, 2.5]
+            reward range: [1.5, 2.5]
         else:
             R = 0.0
     """
-    # 获取BMC探针
+    # Fetch the BMC probe
     try:
         bmc_probe = get_bmc_probe()
     except RuntimeError as e:
-        print(f"⚠️  警告: {e}")
-        print("⚠️  回退到标准的correctness_reward_func_gpqa")
+        print(f"[WARN] {e}")
+        print("[WARN] Falling back to the standard correctness_reward_func_gpqa")
         return correctness_reward_func_gpqa(prompts, completions, answer, step, run_name, **kwargs)
     
-    # 提取响应和答案
+    # Extract responses and answers
     responses = [completion[0]["content"] for completion in completions]
     extracted_responses = [extract_gpqa_answer(r) for r in responses]
     
-    # 计算training_progress
+    # Compute training_progress
     global _bmc_training_config
     if total_steps is None and _bmc_training_config:
         total_steps = _bmc_training_config.get('total_steps')
@@ -892,7 +891,7 @@ def bmc_reward_gpqa(
     
     alpha = 0.5 + 0.5 * training_progress
     
-    # 计算奖励
+    # Compute the rewards
     rewards = []
     for i, (response, extracted, gt_answer) in enumerate(zip(responses, extracted_responses, answer)):
         is_correct = (extracted == gt_answer)
@@ -912,16 +911,16 @@ def bmc_reward_gpqa(
                 reward = np.clip(reward, 1.5, 2.5)
                 
                 if np.random.rand() < 0.1:
-                    print(f"✅ 正确答案 (GPQA) | BMC={bmc_score:.3f} | alpha={alpha:.3f} | Reward={reward:.3f}")
+                    print(f"[OK] Correct (GPQA) | BMC={bmc_score:.3f} | alpha={alpha:.3f} | Reward={reward:.3f}")
             except Exception as e:
-                print(f"⚠️  BMC计算失败: {e}")
+                print(f"[WARN] BMC computation failed: {e}")
                 reward = 1.5
         else:
             reward = 0.0
         
         rewards.append(reward)
     
-    # 打印统计信息
+    # Print statistics
     if step is not None and step % 100 == 0:
         correct_count = sum(1 for r in rewards if r > 0)
         avg_reward = np.mean(rewards) if rewards else 0.0
@@ -948,16 +947,16 @@ def correctness_reward_func_arc(
     prompts, completions, answer, step=None, run_name=None, **kwargs
 ) -> list[float]:
     """
-    ARC任务的奖励函数（多选题格式，支持A-E）
+    Reward function for ARC (multiple-choice format, options A-E).
     """
     responses = [completion[0]["content"] for completion in completions]
     extracted_responses = [extract_arc_answer(r) for r in responses]
     
-    # 调试输出
+    # Debug output
     if np.random.rand() < 0.1:
         print(f"ARC - Ground Truth: {answer[0]}")
         print(f"ARC - Extracted: {extracted_responses[0]}")
-        print("✅" if extracted_responses[0] == answer[0] else "❌")
+        print("[CORRECT]" if extracted_responses[0] == answer[0] else "[INCORRECT]")
     
     return [2.0 if r == a else 0.0 for r, a in zip(extracted_responses, answer)]
 
@@ -972,29 +971,29 @@ def bmc_reward_arc(
     **kwargs
 ) -> list[float]:
     """
-    BMC增强的ARC奖励函数
+    BMC-augmented reward function for ARC.
     
-    奖励公式：
-        if 答案正确:
+    Reward:
+        if the answer is correct:
             R = 1.5 + alpha × BMC_score
             alpha = 0.5 + 0.5 × training_progress
-            奖励范围: [1.5, 2.5]
+            reward range: [1.5, 2.5]
         else:
             R = 0.0
     """
-    # 获取BMC探针
+    # Fetch the BMC probe
     try:
         bmc_probe = get_bmc_probe()
     except RuntimeError as e:
-        print(f"⚠️  警告: {e}")
-        print("⚠️  回退到标准的correctness_reward_func_arc")
+        print(f"[WARN] {e}")
+        print("[WARN] Falling back to the standard correctness_reward_func_arc")
         return correctness_reward_func_arc(prompts, completions, answer, step, run_name, **kwargs)
     
-    # 提取响应和答案
+    # Extract responses and answers
     responses = [completion[0]["content"] for completion in completions]
     extracted_responses = [extract_arc_answer(r) for r in responses]
     
-    # 计算training_progress
+    # Compute training_progress
     global _bmc_training_config
     if total_steps is None and _bmc_training_config:
         total_steps = _bmc_training_config.get('total_steps')
@@ -1006,7 +1005,7 @@ def bmc_reward_arc(
     
     alpha = 0.5 + 0.5 * training_progress
     
-    # 计算奖励
+    # Compute the rewards
     rewards = []
     for i, (response, extracted, gt_answer) in enumerate(zip(responses, extracted_responses, answer)):
         is_correct = (extracted == gt_answer)
@@ -1026,16 +1025,16 @@ def bmc_reward_arc(
                 reward = np.clip(reward, 1.5, 2.5)
                 
                 if np.random.rand() < 0.1:
-                    print(f"✅ 正确答案 (ARC) | BMC={bmc_score:.3f} | alpha={alpha:.3f} | Reward={reward:.3f}")
+                    print(f"[OK] Correct (ARC) | BMC={bmc_score:.3f} | alpha={alpha:.3f} | Reward={reward:.3f}")
             except Exception as e:
-                print(f"⚠️  BMC计算失败: {e}")
+                print(f"[WARN] BMC computation failed: {e}")
                 reward = 1.5
         else:
             reward = 0.0
         
         rewards.append(reward)
     
-    # 打印统计信息
+    # Print statistics
     if step is not None and step % 100 == 0:
         correct_count = sum(1 for r in rewards if r > 0)
         avg_reward = np.mean(rewards) if rewards else 0.0

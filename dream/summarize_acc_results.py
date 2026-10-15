@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-汇总准确率评估结果
-从合并后的JSON文件生成CSV摘要表格
+Summarize accuracy evaluation results.
+Builds CSV summary tables from the merged JSON result files.
 """
 import argparse
 import json
@@ -13,16 +13,16 @@ import pandas as pd
 
 def load_merged_results(result_dir):
     """
-    加载所有merged.json文件
+    Load every *_merged.json file.
     
     Returns:
-        list of dict: 包含task, gen_length, metrics的列表
+        list of dict: entries holding task, gen_length and metrics
     """
     pattern = f"{result_dir}/*_merged.json"
     files = sorted(glob.glob(pattern))
     
     if not files:
-        print(f"⚠️  No merged files found in: {result_dir}")
+        print(f"[WARN] No merged files found in: {result_dir}")
         return []
     
     print(f"\n{'='*60}")
@@ -37,7 +37,7 @@ def load_merged_results(result_dir):
             with open(file, 'r') as f:
                 data = json.load(f)
             
-            # 提取关键信息
+            # Extract the key fields
             config = data.get('config', {})
             metrics = data.get('metrics', {})
             
@@ -58,11 +58,11 @@ def load_merged_results(result_dir):
             
             all_results.append(result)
             
-            print(f"  ✓ {result['task']:10s} len={result['gen_length']:3d} "
+            print(f"  [OK] {result['task']:10s} len={result['gen_length']:3d} "
                   f"acc={result['accuracy']:.4f} ({result['total_correct']}/{result['total_samples']})")
             
         except Exception as e:
-            print(f"  ⚠️  Error loading {file}: {e}")
+            print(f"  [WARN] Error loading {file}: {e}")
             continue
     
     return all_results
@@ -70,7 +70,7 @@ def load_merged_results(result_dir):
 
 def create_summary_table(results):
     """
-    创建摘要表格
+    Create the summary table.
     
     Returns:
         pandas.DataFrame
@@ -78,35 +78,35 @@ def create_summary_table(results):
     if not results:
         return pd.DataFrame()
     
-    # 转换为DataFrame
+    # Convert to a DataFrame
     df = pd.DataFrame(results)
     
-    # 按任务和生成长度排序
+    # Sort by task and generation length
     df = df.sort_values(['task', 'gen_length'])
     
-    # 选择要显示的列
+    # Keep only the columns we want to display
     summary_df = df[[
         'task', 'gen_length', 'total_samples', 'total_correct', 'accuracy',
         'diffusion_steps', 'temperature', 'top_p', 'alg'
     ]].copy()
     
-    # 格式化准确率为百分比
+    # Express the accuracy as a percentage
     summary_df['accuracy_pct'] = summary_df['accuracy'] * 100
     
     return summary_df
 
 
 def print_summary_stats(df):
-    """打印摘要统计"""
+    """Print the summary statistics."""
     if df.empty:
         print("No results to summarize")
         return
     
     print(f"\n{'='*80}")
-    print(f"📊 ACCURACY SUMMARY")
+    print(f"ACCURACY SUMMARY")
     print(f"{'='*80}")
     
-    # 按任务分组统计
+    # Report statistics per task
     for task in df['task'].unique():
         task_df = df[df['task'] == task]
         print(f"\n{task.upper()}:")
@@ -132,43 +132,43 @@ def print_summary_stats(df):
 
 
 def save_summary(df, output_file):
-    """保存摘要到CSV"""
+    """Save the summary to CSV."""
     if df.empty:
         print("No data to save")
         return
     
-    # 创建输出目录
+    # Create the output directory
     os.makedirs(os.path.dirname(output_file) or '.', exist_ok=True)
     
-    # 保存详细版本
+    # Write the detailed version
     df.to_csv(output_file, index=False, float_format='%.4f')
-    print(f"💾 Detailed summary saved to: {output_file}")
+    print(f"Detailed summary saved to: {output_file}")
     
-    # 保存简化版本
+    # Write the simplified version
     simple_output = output_file.replace('.csv', '_simple.csv')
     simple_df = df[['task', 'gen_length', 'total_samples', 'total_correct', 'accuracy_pct']].copy()
     simple_df.columns = ['Task', 'Gen_Length', 'Samples', 'Correct', 'Accuracy(%)']
     simple_df.to_csv(simple_output, index=False, float_format='%.2f')
-    print(f"💾 Simple summary saved to: {simple_output}")
+    print(f"Simple summary saved to: {simple_output}")
 
 
 def create_pivot_table(df, output_file):
-    """创建透视表（任务 x 生成长度）"""
+    """Create a pivot table (task x generation length)."""
     if df.empty:
         return
     
-    # 创建透视表
+    # Build the pivot table
     pivot = df.pivot(index='task', columns='gen_length', values='accuracy_pct')
     pivot = pivot.sort_index()
     
-    # 保存透视表
+    # Save the pivot table
     pivot_output = output_file.replace('.csv', '_pivot.csv')
     pivot.to_csv(pivot_output, float_format='%.2f')
-    print(f"💾 Pivot table saved to: {pivot_output}")
+    print(f"Pivot table saved to: {pivot_output}")
     
-    # 打印透视表
+    # Print the pivot table
     print(f"\n{'='*80}")
-    print("📊 PIVOT TABLE (Accuracy %)")
+    print("PIVOT TABLE (Accuracy %)")
     print(f"{'='*80}")
     print(pivot.to_string(float_format=lambda x: f"{x:.2f}"))
     print(f"{'='*80}\n")
@@ -183,33 +183,33 @@ def main():
     
     args = parser.parse_args()
     
-    # 加载结果
+    # Load the results
     results = load_merged_results(args.result_dir)
     
     if not results:
-        print("\n❌ No results found. Make sure to run merge_distributed.py first.")
+        print("\n[ERROR] No results found. Make sure to run merge_distributed.py first.")
         exit(1)
     
-    # 创建DataFrame
+    # Build the DataFrame
     df = create_summary_table(results)
     
-    # 打印统计信息
+    # Print the statistics
     print_summary_stats(df)
     
-    # 生成输出文件名
+    # Build the output file name
     if args.output_file is None:
         output_file = f"{args.result_dir}/accuracy_summary.csv"
     else:
         output_file = args.output_file
     
-    # 保存摘要
+    # Save the summary
     save_summary(df, output_file)
     
-    # 创建透视表
+    # Create the pivot table
     create_pivot_table(df, output_file)
     
     print(f"\n{'='*80}")
-    print("✅ Summary complete!")
+    print("[OK] Summary complete!")
     print(f"{'='*80}\n")
 
 

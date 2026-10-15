@@ -1,13 +1,13 @@
 """
-BMC核心模块：V3扩展版 - 最终修正版
-基于测试结果，确保使用正确的CE计算方法（方法1：直接token匹配）
+BMC core module: V3 extension with cross-entropy scoring.
+Uses the CE formulation validated by our tests (direct token matching).
 """
 import torch
 import torch.nn.functional as F
 from typing import Dict, Tuple, Optional
 import numpy as np
 
-# 导入原始BMC模块作为基类
+# Import the original BMC module to use as the base class
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -16,7 +16,7 @@ from bmc_core import BMCEstimator
 
 class BMCEstimatorWithCE(BMCEstimator):
     """
-    扩展版BMC - 使用验证通过的CE计算方法
+    Extended BMC estimator that adds the validated cross-entropy metric.
     """
     
     def __init__(
@@ -57,7 +57,7 @@ class BMCEstimatorWithCE(BMCEstimator):
         self.debug_ce = debug_ce
         self.ce_call_count = 0
         
-        # 验证模式
+        # Validate the scoring mode
         valid_modes = ['ce_only', 'ce_plus_six', 'six_only']
         if self.scoring_mode not in valid_modes:
             raise ValueError(f"Invalid scoring_mode: {self.scoring_mode}. Must be one of {valid_modes}")
@@ -65,20 +65,20 @@ class BMCEstimatorWithCE(BMCEstimator):
         self._print_ce_config()
     
     def _print_ce_config(self):
-        """打印配置"""
+        """Print the CE configuration."""
         print("\n" + "="*60)
-        print("BMC V3 交叉熵对比实验（最终修正版）")
+        print("BMC V3 cross-entropy comparison experiment")
         print("="*60)
-        print(f"📊 评分模式: {self.scoring_mode.upper()}")
-        print(f"🐛 调试模式: {'开启' if self.debug_ce else '关闭'}")
-        print(f"✅ CE计算方法: 直接token匹配（已验证）")
+        print(f"[INFO] Scoring mode: {self.scoring_mode.upper()}")
+        print(f"[INFO] Debug mode: {'on' if self.debug_ce else 'off'}")
+        print(f"[INFO] CE method: direct token matching")
         
         if self.scoring_mode == 'ce_only':
-            print("   → 只使用交叉熵")
+            print("   -> Cross-entropy only")
         elif self.scoring_mode == 'ce_plus_six':
-            print(f"   → CE权重: {self.ce_weight:.1%}, 六指标: {1-self.ce_weight:.1%}")
+            print(f"   -> CE weight: {self.ce_weight:.1%}, six metrics: {1-self.ce_weight:.1%}")
         else:
-            print("   → 只使用六个指标")
+            print("   -> Six metrics only")
         
         print("="*60 + "\n")
     
@@ -90,22 +90,23 @@ class BMCEstimatorWithCE(BMCEstimator):
         sample_idx: int = 0
     ) -> Tuple[float, float, Dict]:
         """
-        ✅ 使用测试验证通过的方法：直接token匹配CE
+        Cross-entropy of the original answer tokens under the reconstructed sequence
+        (direct token matching, the formulation validated in our tests).
         
-        该方法在单样本测试中表现良好：
-        - 平均CE: 0.1133（正常范围）
-        - CE质量分数: 0.8929（高质量）
+        On a single-sample sanity check this gives:
+        - mean CE: 0.1133 (reasonable range)
+        - CE quality score: 0.8929 (high quality)
         
         Args:
-            reconstructed_ids: 重建序列 [batch, seq_len]
-            original_ids: 原始序列 [batch, seq_len]
-            answer_start_idx: 答案起始位置
-            sample_idx: 样本索引
+            reconstructed_ids: reconstructed sequence [batch, seq_len]
+            original_ids: original sequence [batch, seq_len]
+            answer_start_idx: index where the answer begins
+            sample_idx: sample index
             
         Returns:
-            raw_ce: 平均交叉熵
-            ce_quality: 质量分数 [0, 1]
-            debug_info: 调试信息
+            raw_ce: mean cross-entropy
+            ce_quality: quality score in [0, 1]
+            debug_info: debug information
         """
         debug_info = {
             'sample_idx': sample_idx,
@@ -116,43 +117,43 @@ class BMCEstimatorWithCE(BMCEstimator):
         try:
             batch_size, seq_len = original_ids.shape
             
-            # 🔥 详细的调试日志（前5个样本）
+            # Verbose debug logging for the first few samples
             show_debug = self.debug_ce and self.ce_call_count < 5
             
             if show_debug:
                 print(f"\n{'='*70}")
-                print(f"🐛 CE计算详细日志 (样本 {sample_idx})")
+                print(f"[INFO] CE computation details (sample {sample_idx})")
                 print(f"{'='*70}")
-                print(f"原始序列形状: {original_ids.shape}")
-                print(f"重建序列形状: {reconstructed_ids.shape}")
-                print(f"答案起始位置: {answer_start_idx}")
-                print(f"序列总长度: {seq_len}")
+                print(f"Original sequence shape: {original_ids.shape}")
+                print(f"Reconstructed sequence shape: {reconstructed_ids.shape}")
+                print(f"Answer start index: {answer_start_idx}")
+                print(f"Total sequence length: {seq_len}")
             
-            # 🔥 宽松的边界检查和自动修正
+            # Lenient boundary checks with automatic correction
             original_answer_start = answer_start_idx
             
-            # 情况1：answer_start_idx超出范围
+            # Case 1: answer_start_idx is out of range
             if answer_start_idx >= seq_len:
                 if show_debug:
-                    print(f"⚠️  answer_start_idx ({answer_start_idx}) >= seq_len ({seq_len})")
-                    print(f"   自动修正：使用后1/3作为答案区域")
+                    print(f"[WARN] answer_start_idx ({answer_start_idx}) >= seq_len ({seq_len})")
+                    print(f"   Auto-correcting: use the last third of the sequence as the answer span")
                 answer_start_idx = max(0, seq_len * 2 // 3)
                 debug_info['boundary_check'] = f'adjusted_from_{original_answer_start}_to_{answer_start_idx}'
             
-            # 情况2：answer_start_idx为负
+            # Case 2: answer_start_idx is negative
             elif answer_start_idx < 0:
                 if show_debug:
-                    print(f"⚠️  answer_start_idx ({answer_start_idx}) < 0")
-                    print(f"   自动修正：从0开始")
+                    print(f"[WARN] answer_start_idx ({answer_start_idx}) < 0")
+                    print(f"   Auto-correcting: start from 0")
                 answer_start_idx = 0
                 debug_info['boundary_check'] = f'adjusted_from_{original_answer_start}_to_0'
             
-            # 情况3：答案区域太短（少于2个token）
+            # Case 3: the answer span is too short (fewer than 2 tokens)
             answer_len = seq_len - answer_start_idx
             if answer_len < 2:
                 if show_debug:
-                    print(f"⚠️  答案区域太短 ({answer_len} tokens)")
-                    print(f"   自动修正：确保至少5个token")
+                    print(f"[WARN] Answer span is too short ({answer_len} tokens)")
+                    print(f"   Auto-correcting: ensure at least 5 tokens")
                 answer_start_idx = max(0, seq_len - 5)
                 answer_len = seq_len - answer_start_idx
                 debug_info['boundary_check'] = f'adjusted_for_min_length'
@@ -161,9 +162,9 @@ class BMCEstimatorWithCE(BMCEstimator):
             debug_info['answer_len'] = answer_len
             
             if show_debug:
-                print(f"✓ 修正后答案区域: [{answer_start_idx}, {seq_len}), 长度={answer_len}")
+                print(f"[OK] Final answer span: [{answer_start_idx}, {seq_len}), length={answer_len}")
                 
-                # 解码答案内容
+                # Decode the answer content
                 try:
                     orig_answer_text = self.tokenizer.decode(
                         original_ids[0, answer_start_idx:seq_len],
@@ -173,53 +174,53 @@ class BMCEstimatorWithCE(BMCEstimator):
                         reconstructed_ids[0, answer_start_idx:seq_len],
                         skip_special_tokens=False
                     )
-                    print(f"原始答案: '{orig_answer_text}'")
-                    print(f"重建答案: '{recon_answer_text}'")
+                    print(f"Original answer: '{orig_answer_text}'")
+                    print(f"Reconstructed answer: '{recon_answer_text}'")
                 except:
-                    print(f"（无法解码答案文本）")
+                    print(f"(answer text could not be decoded)")
             
             with torch.no_grad():
-                # 🔥 计算logits（使用重建序列）
+                # Compute logits from the reconstructed sequence
                 logits = self.model(reconstructed_ids).logits  # [batch, seq_len, vocab_size]
                 
                 if show_debug:
-                    print(f"\nLogits形状: {logits.shape}")
-                    print(f"Logits范围: [{logits.min().item():.2f}, {logits.max().item():.2f}]")
-                    print(f"包含NaN: {torch.isnan(logits).any().item()}")
-                    print(f"包含Inf: {torch.isinf(logits).any().item()}")
+                    print(f"\nLogits shape: {logits.shape}")
+                    print(f"Logits range: [{logits.min().item():.2f}, {logits.max().item():.2f}]")
+                    print(f"Contains NaN: {torch.isnan(logits).any().item()}")
+                    print(f"Contains Inf: {torch.isinf(logits).any().item()}")
                 
-                # 检查logits异常
+                # Guard against invalid logits
                 if torch.isnan(logits).any() or torch.isinf(logits).any():
                     debug_info['error'] = 'logits_contain_nan_or_inf'
                     if show_debug:
-                        print(f"❌ Logits异常")
+                        print(f"[ERROR] Invalid logits")
                     return float('inf'), 0.0, debug_info
                 
-                # 🔥 方法1：直接token匹配（已在测试中验证）
-                # 在答案区域的每个位置，计算original token的概率
+                # Direct token matching: at every position of the answer span,
+                # score the probability assigned to the original token
                 answer_logits = logits[:, answer_start_idx:seq_len, :]  # [batch, ans_len, vocab]
                 answer_targets = original_ids[:, answer_start_idx:seq_len]  # [batch, ans_len]
                 
                 if show_debug:
-                    print(f"\n答案logits形状: {answer_logits.shape}")
-                    print(f"答案targets形状: {answer_targets.shape}")
+                    print(f"\nAnswer logits shape: {answer_logits.shape}")
+                    print(f"Answer targets shape: {answer_targets.shape}")
                 
-                # 计算log概率
+                # Log probabilities
                 log_probs = F.log_softmax(answer_logits, dim=-1)  # [batch, ans_len, vocab]
                 
-                # 获取target token的log概率
+                # Log probability of each target token
                 target_log_probs = log_probs.gather(
                     dim=-1,
                     index=answer_targets.unsqueeze(-1)
                 ).squeeze(-1)  # [batch, ans_len]
                 
                 if show_debug:
-                    print(f"Target log probs范围: [{target_log_probs.min().item():.4f}, {target_log_probs.max().item():.4f}]")
+                    print(f"Target log prob range: [{target_log_probs.min().item():.4f}, {target_log_probs.max().item():.4f}]")
                 
                 # CE = -log(p)
                 token_ces = -target_log_probs  # [batch, ans_len]
                 
-                # 平均CE
+                # Mean CE
                 raw_ce = token_ces.mean().item()
                 
                 debug_info['raw_ce'] = raw_ce
@@ -228,14 +229,14 @@ class BMCEstimatorWithCE(BMCEstimator):
                 debug_info['ce_std'] = token_ces.std().item()
                 
                 if show_debug:
-                    print(f"\nCE统计:")
-                    print(f"  平均CE: {raw_ce:.4f}")
-                    print(f"  范围: [{debug_info['ce_min']:.4f}, {debug_info['ce_max']:.4f}]")
-                    print(f"  标准差: {debug_info['ce_std']:.4f}")
+                    print(f"\nCE statistics:")
+                    print(f"  Mean CE: {raw_ce:.4f}")
+                    print(f"  Range: [{debug_info['ce_min']:.4f}, {debug_info['ce_max']:.4f}]")
+                    print(f"  Std: {debug_info['ce_std']:.4f}")
                     
-                    # 打印前5个token的详细信息
-                    print(f"\n前5个token详情:")
-                    print(f"{'位置':<6} {'Token':<15} {'ID':<8} {'Log Prob':<10} {'Prob':<10} {'CE':<10}")
+                    # Per-token details for the first few tokens
+                    print(f"\nFirst 5 tokens:")
+                    print(f"{'Pos':<6} {'Token':<15} {'ID':<8} {'Log Prob':<10} {'Prob':<10} {'CE':<10}")
                     print(f"{'-'*70}")
                     for i in range(min(5, answer_len)):
                         token_id = answer_targets[0, i].item()
@@ -248,7 +249,7 @@ class BMCEstimatorWithCE(BMCEstimator):
                             token_str = f"<{token_id}>"
                         print(f"{answer_start_idx+i:<6} {token_str:<15} {token_id:<8} {log_prob:<10.4f} {prob:<10.4f} {ce:<10.4f}")
                 
-                # 🔥 转换为质量分数
+                # Convert CE into a bounded quality score
                 if raw_ce == float('inf') or raw_ce > 100:
                     ce_quality = 0.0
                     debug_info['quality_saturated'] = True
@@ -259,7 +260,7 @@ class BMCEstimatorWithCE(BMCEstimator):
                 debug_info['ce_quality'] = ce_quality
                 
                 if show_debug:
-                    print(f"\n✅ CE质量分数: {ce_quality:.4f}")
+                    print(f"\n[OK] CE quality score: {ce_quality:.4f}")
                     print(f"{'='*70}\n")
                 
                 self.ce_call_count += 1
@@ -269,7 +270,7 @@ class BMCEstimatorWithCE(BMCEstimator):
         except Exception as e:
             debug_info['error'] = str(e)
             if self.debug_ce:
-                print(f"\n❌ CE计算异常: {e}")
+                print(f"\n[ERROR] CE computation failed: {e}")
                 import traceback
                 traceback.print_exc()
             return float('inf'), 0.0, debug_info
@@ -283,9 +284,9 @@ class BMCEstimatorWithCE(BMCEstimator):
         avg_confidence: float = 0.0
     ) -> Dict[str, float]:
         """
-        扩展的一致性评分
+        Extended consistency scoring that can blend in the CE metric.
         """
-        # 1. 计算基础六指标
+        # 1. Compute the six base metrics
         base_scores = super().compute_consistency_score(
             original_ids,
             reconstructed_ids,
@@ -294,7 +295,7 @@ class BMCEstimatorWithCE(BMCEstimator):
             avg_confidence
         )
         
-        # 2. 计算CE（如果需要）
+        # 2. Compute CE when the scoring mode requires it
         if self.scoring_mode in ['ce_only', 'ce_plus_six']:
             raw_ce, ce_quality, debug_info = self.compute_answer_token_ce(
                 reconstructed_ids,
@@ -306,7 +307,7 @@ class BMCEstimatorWithCE(BMCEstimator):
             base_scores['reconstruction_ce'] = raw_ce
             base_scores['ce_quality_score'] = ce_quality
             
-            # 保存关键调试信息
+            # Keep the key debug fields in the result
             if 'boundary_check' in debug_info:
                 base_scores['ce_boundary_check'] = debug_info['boundary_check']
             if 'answer_len' in debug_info:
@@ -317,7 +318,7 @@ class BMCEstimatorWithCE(BMCEstimator):
             base_scores['reconstruction_ce'] = -1.0
             base_scores['ce_quality_score'] = -1.0
         
-        # 3. 根据模式计算最终分数
+        # 3. Combine into the final score according to the scoring mode
         if self.scoring_mode == 'ce_only':
             final_score = base_scores['ce_quality_score']
             

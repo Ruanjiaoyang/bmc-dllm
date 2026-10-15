@@ -1,6 +1,6 @@
 """
 Publication-Quality Geometric Analysis Figure (Final Version)
-Clean design - 去掉左上角统计框，调整标注避免遮挡
+Clean design - the top-left statistics box is dropped and annotations are repositioned to avoid overlap.
 """
 
 import numpy as np
@@ -15,7 +15,7 @@ import argparse
 
 
 def setup_publication_style():
-    """设置学术论文级别的matplotlib样式"""
+    """Configure publication-quality matplotlib styling."""
     plt.style.use('seaborn-v0_8-whitegrid')
     
     plt.rcParams.update({
@@ -33,7 +33,7 @@ def setup_publication_style():
 
 
 def load_bmc_results(result_dir, task_name):
-    """加载BMC结果数据"""
+    """Load the BMC result data."""
     pattern = f"{result_dir}/{task_name}_*_bmc_v2_*_generations.json"
     files = glob.glob(pattern)
     
@@ -73,7 +73,7 @@ def load_bmc_results(result_dir, task_name):
     features = np.array(all_features)
     labels = np.array(all_labels)
     
-    print(f"✓ Loaded {len(features)} valid samples")
+    print(f"[OK] Loaded {len(features)} valid samples")
     print(f"  Correct: {labels.sum()} ({labels.mean()*100:.1f}%)")
     print(f"  Incorrect: {len(labels)-labels.sum()}")
     
@@ -81,7 +81,7 @@ def load_bmc_results(result_dir, task_name):
 
 
 def compute_manifold_density(features, bandwidth=0.18):
-    """在6D feature space计算manifold density"""
+    """Estimate the manifold density in the 6D feature space."""
     features_jittered = features + np.random.normal(0, 0.008, features.shape)
     
     kde = KernelDensity(bandwidth=bandwidth, kernel='gaussian')
@@ -94,7 +94,7 @@ def compute_manifold_density(features, bandwidth=0.18):
 
 
 def create_blue_pink_colormap():
-    """创建深粉色(incorrect) -> 蓝色(correct)的colormap"""
+    """Build a colormap running from deep pink (incorrect) to blue (correct)."""
     colors = ['#C2185B', '#E91E63', '#F8BBD0', '#E3F2FD', '#64B5F6', '#1976D2']
     n_bins = 256
     cmap = LinearSegmentedColormap.from_list('pink_blue', colors, N=n_bins)
@@ -102,7 +102,7 @@ def create_blue_pink_colormap():
 
 def find_manifold_boundary_by_correctness(density, labels, n_bins=50):
     """
-    基于correctness rate的变化找manifold boundary
+    Locate the manifold boundary from the change in correctness rate.
     """
     # Sort by density
     sorted_idx = np.argsort(density)
@@ -133,7 +133,7 @@ def find_manifold_boundary_by_correctness(density, labels, n_bins=50):
     return threshold
 def plot_geometric_validation(features, labels, output_path, task_name='GSM8K'):
     """
-    生成优化后的geometric validation figure
+    Generate the refined geometric validation figure.
     """
     setup_publication_style()
     
@@ -144,18 +144,18 @@ def plot_geometric_validation(features, labels, output_path, task_name='GSM8K'):
     # Quality proxy
     quality = features.mean(axis=1)
     
-    # ========== 改进：使用correctness-based boundary ==========
+    # ========== Improvement: use a correctness-based boundary ==========
     print("\nFinding manifold boundary...")
     
-    # 方法1：基于correctness gradient（推荐）
+    # Option 1: correctness gradient (preferred)
     manifold_threshold = find_manifold_boundary_by_correctness(density, labels)
     print(f"Correctness-based threshold: {manifold_threshold:.2f}")
     
-    # 方法2：Youden's Index（备选）
+    # Option 2: Youden's Index (alternative)
     # manifold_threshold = find_manifold_boundary_by_youden(density, labels)
     # print(f"Youden-based threshold: {manifold_threshold:.2f}")
     
-    # 验证：检查两侧的correctness差异
+    # Sanity check: compare correctness on both sides of the boundary
     below_mask = density < manifold_threshold
     above_mask = density >= manifold_threshold
     
@@ -188,12 +188,12 @@ def plot_geometric_validation(features, labels, output_path, task_name='GSM8K'):
     fig = plt.figure(figsize=(7, 5))
     ax = fig.add_subplot(111)
     
-    # 颜色配置
-    COLOR_BOUNDARY = '#FF8C42'  # 橙色边界线
-    COLOR_CORRECT = '#1976D2'   # 蓝色（正确）
-    COLOR_INCORRECT = '#C2185B' # 深粉色（错误）
+    # Color configuration
+    COLOR_BOUNDARY = '#FF8C42'  # orange boundary line
+    COLOR_CORRECT = '#1976D2'   # blue (correct)
+    COLOR_INCORRECT = '#C2185B' # deep pink (incorrect)
     
-    # 自定义colormap
+    # Custom colormap
     custom_cmap = create_blue_pink_colormap()
     
     # ========== Hexbin Plot ==========
@@ -205,7 +205,7 @@ def plot_geometric_validation(features, labels, output_path, task_name='GSM8K'):
         mincnt=1, alpha=0.8,
         edgecolors='white', linewidth=0.2,
         vmin=0, vmax=1,
-        zorder=1  # 明确hexbin在底层
+        zorder=1  # keep the hexbin layer at the bottom
     )
     
     # ========== Density Contours ==========
@@ -237,24 +237,24 @@ def plot_geometric_validation(features, labels, output_path, task_name='GSM8K'):
     ax.plot(x_trend, y_trend, 'k--', linewidth=2.5, alpha=0.7,
            label=f'Linear Fit (R²={r_value**2:.3f})', zorder=11)
     
-    # ========== Region Annotations (改进位置避免遮挡) ==========
-    # 使用transform定位，放在图的顶部区域，避开数据密集区
+    # ========== Region Annotations (repositioned to avoid overlap) ==========
+    # Place the labels along the top of the axes, away from the dense data region
     y_range = quality.max() - quality.min()
     
-    # Off-manifold region (左侧，使用数据坐标)
+    # Off-manifold region (left side, in data coordinates)
     x_off = density.min() + (manifold_threshold - density.min()) / 2
-    y_off = quality.max() - 0.04 * y_range  # 紧贴顶部
+    y_off = quality.max() - 0.04 * y_range  # flush with the top
     
     ax.text(x_off, y_off, 'Off-Manifold\nLow Stability',
-           ha='center', va='top',  # 改为va='top'
+           ha='center', va='top',  # anchored at the top
            bbox=dict(boxstyle='round,pad=0.5', 
                     facecolor='#FCE4EC', 
                     edgecolor=COLOR_INCORRECT, 
                     alpha=0.98, linewidth=1.8),
            fontsize=9, fontweight='bold', color=COLOR_INCORRECT,
-           zorder=100)  # 超高zorder
+           zorder=100)  # very high zorder so it stays on top
     
-    # On-manifold region (右侧)
+    # On-manifold region (right side)
     x_on = manifold_threshold + (density.max() - manifold_threshold) / 2
     y_on = quality.max() - 0.04 * y_range
     
@@ -267,8 +267,8 @@ def plot_geometric_validation(features, labels, output_path, task_name='GSM8K'):
            fontsize=9, fontweight='bold', color=COLOR_CORRECT,
            zorder=100)
     
-    # ========== 删除左上角统计框，保持clean视觉 ==========
-    # (原来的stats_text部分已移除)
+    # ========== The top-left statistics box is omitted for a cleaner look ==========
+    # (the original stats_text block has been removed)
     
     # ========== Labels and Title ==========
     ax.set_xlabel('Manifold Density', fontsize=12, fontweight='bold')
@@ -300,8 +300,8 @@ def plot_geometric_validation(features, labels, output_path, task_name='GSM8K'):
     plt.savefig(pdf_path, dpi=300, bbox_inches='tight', format='pdf')
     plt.savefig(png_path, dpi=300, bbox_inches='tight', facecolor='white')
     
-    print(f"✓ Saved PDF: {pdf_path}")
-    print(f"✓ Saved PNG: {png_path}")
+    print(f"[OK] Saved PDF: {pdf_path}")
+    print(f"[OK] Saved PNG: {png_path}")
     
     plt.close()
     
@@ -341,7 +341,7 @@ def main():
     )
     
     print(f"\n{'='*70}")
-    print(f"✅ Figure generation complete!")
+    print(f"Figure generation complete!")
     print(f"{'='*70}")
     print(f"\nKey Statistics (for caption/text):")
     print(f"  • Spearman ρ = {stats['spearman_rho']:.3f} (p < 0.001)")

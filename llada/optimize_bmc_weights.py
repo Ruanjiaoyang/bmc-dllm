@@ -1,6 +1,6 @@
 """
-🔬 BMC一致性评分优化工具 - 交叉验证版本
-修复了XGBoost过拟合问题，使用交叉验证评估所有模型
+BMC consistency-score optimization tool - cross-validation version.
+Fixes XGBoost overfitting by evaluating every model with cross-validation.
 """
 
 import json
@@ -21,20 +21,20 @@ from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# 尝试导入可选依赖
+# Optional dependencies
 try:
     import xgboost as xgb
     HAS_XGBOOST = True
 except ImportError:
     HAS_XGBOOST = False
-    print("⚠️  XGBoost not available. Install with: pip install xgboost")
+    print("[WARN] XGBoost not available. Install with: pip install xgboost")
 
 try:
     from bayes_opt import BayesianOptimization
     HAS_BAYESOPT = True
 except ImportError:
     HAS_BAYESOPT = False
-    print("⚠️  Bayesian Optimization not available. Install with: pip install bayesian-optimization")
+    print("[WARN] Bayesian Optimization not available. Install with: pip install bayesian-optimization")
 
 try:
     import shap
@@ -44,13 +44,13 @@ except ImportError:
 
 
 class BMCScoreOptimizer:
-    """BMC评分公式优化器 - 使用交叉验证避免过拟合"""
+    """Optimizer for the BMC scoring formula, using cross-validation to avoid overfitting."""
 
     def __init__(self, results_pattern: str, task_name: str = "gsm8k"):
         """
         Args:
-            results_pattern: 结果文件匹配模式
-            task_name: 任务名称
+            results_pattern: Glob pattern matching the result files
+            task_name: Name of the task
         """
         self.task_name = task_name
         self.data = self._load_data(results_pattern)
@@ -59,24 +59,24 @@ class BMCScoreOptimizer:
             raise ValueError("No valid data loaded!")
 
         print(f"\n{'=' * 60}")
-        print(f"📊 Data Summary ({task_name.upper()})")
+        print(f"Data Summary ({task_name.upper()})")
         print(f"{'=' * 60}")
         print(f"Total samples: {len(self.data)}")
         print(f"Correct samples: {sum(d['label'] for d in self.data)}")
         print(f"Wrong samples: {sum(1 - d['label'] for d in self.data)}")
 
-        # 提取特征和标签
+        # Extract features and labels
         self.X, self.y, self.feature_names = self._extract_features()
 
         print(f"\nFeatures used: {self.feature_names}")
         print(f"{'=' * 60}\n")
 
     def _load_data(self, pattern: str) -> List[Dict]:
-        """加载BMC结果数据"""
+        """Load the BMC result data."""
         files = glob.glob(pattern)
         all_samples = []
 
-        print(f"\n🔍 Loading data from: {pattern}")
+        print(f"\nLoading data from: {pattern}")
         print(f"Found {len(files)} files")
 
         for file in files:
@@ -88,14 +88,14 @@ class BMCScoreOptimizer:
                     for item in generations:
                         bmc_scores = item.get('bmc_scores', {})
 
-                        # 跳过无效样本
+                        # Skip invalid samples
                         if bmc_scores.get('skipped', False) or 'error' in bmc_scores:
                             continue
 
                         if bmc_scores.get('consistency_score', -1) < 0:
                             continue
 
-                        # 获取标签
+                        # Ground-truth label
                         is_correct = item.get('is_correct', False)
 
                         sample = {
@@ -109,7 +109,7 @@ class BMCScoreOptimizer:
                             'current_score': bmc_scores.get('consistency_score', 0.0),
                         }
 
-                        # 清理NaN值
+                        # Sanitize NaN values
                         for key, value in sample.items():
                             if key != 'label':
                                 if not isinstance(value, (int, float)) or np.isnan(value) or np.isinf(value):
@@ -118,25 +118,25 @@ class BMCScoreOptimizer:
                         all_samples.append(sample)
 
             except Exception as e:
-                print(f"⚠️  Error loading {file}: {e}")
+                print(f"[WARN] Error loading {file}: {e}")
 
-        print(f"✓ Loaded {len(all_samples)} valid samples")
+        print(f"[OK] Loaded {len(all_samples)} valid samples")
 
-        # 数据验证
+        # Data validation
         if len(all_samples) > 0:
             labels = [s['label'] for s in all_samples]
             unique_labels = set(labels)
             if len(unique_labels) < 2:
-                print(f"⚠️  Warning: Only {len(unique_labels)} class found in data!")
+                print(f"[WARN] Only {len(unique_labels)} class found in data!")
             else:
-                print(f"✓ Found {len(unique_labels)} classes: {unique_labels}")
+                print(f"[OK] Found {len(unique_labels)} classes: {unique_labels}")
                 print(f"  - Class 1 (correct): {sum(labels)}")
                 print(f"  - Class 0 (wrong): {len(labels) - sum(labels)}")
 
         return all_samples
 
     def _extract_features(self) -> Tuple[np.ndarray, np.ndarray, List[str]]:
-        """提取特征矩阵"""
+        """Build the feature matrix."""
         feature_names = [
             'token_accuracy',
             'semantic_similarity',
@@ -146,7 +146,7 @@ class BMCScoreOptimizer:
             'avg_confidence'
         ]
 
-        # 确保所有特征都是float类型，并清理异常值
+        # Cast every feature to float and sanitize invalid values
         X = []
         for d in self.data:
             row = []
@@ -164,7 +164,7 @@ class BMCScoreOptimizer:
         X = np.array(X, dtype=np.float64)
         y = np.array([d['label'] for d in self.data], dtype=np.int32)
 
-        print(f"\n🔍 Feature Matrix Validation:")
+        print(f"\nFeature Matrix Validation:")
         print(f"   Shape: {X.shape}")
         print(f"   Dtype: {X.dtype}")
         print(f"   Contains NaN: {np.any(np.isnan(X))}")
@@ -174,7 +174,7 @@ class BMCScoreOptimizer:
 
     def compute_custom_score(self, weights: Dict[str, float],
                              use_aggressive: bool = True) -> np.ndarray:
-        """根据自定义权重计算一致性分数"""
+        """Compute consistency scores from a custom set of weights."""
         scores = []
 
         for sample in self.data:
@@ -214,7 +214,7 @@ class BMCScoreOptimizer:
         return np.array(scores, dtype=np.float64)
 
     def evaluate_scoring(self, scores: np.ndarray) -> Dict[str, float]:
-        """评估评分公式的效果"""
+        """Evaluate how well a set of scores separates correct from wrong samples."""
         if len(scores) == 0 or np.any(np.isnan(scores)) or np.any(np.isinf(scores)):
             return {
                 'roc_auc': 0.5,
@@ -274,9 +274,9 @@ class BMCScoreOptimizer:
         }
 
     def grid_search(self, n_samples: int = 1000) -> Dict:
-        """网格搜索最优权重"""
+        """Search for the best weights with a random grid search."""
         print(f"\n{'=' * 60}")
-        print("🔍 Method 1: Grid Search")
+        print("Method 1: Grid Search")
         print(f"{'=' * 60}")
         print(f"Searching {n_samples} random weight combinations...")
 
@@ -301,7 +301,7 @@ class BMCScoreOptimizer:
             if (i + 1) % 200 == 0:
                 print(f"  Progress: {i + 1}/{n_samples}, Best ROC-AUC: {best_roc:.4f}")
 
-        print(f"\n✅ Grid Search Complete!")
+        print(f"\nGrid Search Complete!")
         print(f"Best ROC-AUC: {best_roc:.4f}")
         print(f"Best Score Gap: {best_metrics['score_gap']:.4f}")
         print(f"\nOptimal Weights:")
@@ -315,13 +315,13 @@ class BMCScoreOptimizer:
         }
 
     def bayesian_optimization(self, n_iter: int = 50) -> Dict:
-        """贝叶斯优化寻找最优权重"""
+        """Search for the best weights with Bayesian optimization."""
         if not HAS_BAYESOPT:
-            print("❌ Bayesian Optimization not available")
+            print("[ERROR] Bayesian Optimization not available")
             return None
 
         print(f"\n{'=' * 60}")
-        print("🎯 Method 2: Bayesian Optimization (Recommended)")
+        print("Method 2: Bayesian Optimization (Recommended)")
         print(f"{'=' * 60}")
 
         def objective(**kwargs):
@@ -362,7 +362,7 @@ class BMCScoreOptimizer:
             optimizer.maximize(init_points=10, n_iter=n_iter)
 
         except Exception as e:
-            print(f"❌ Bayesian Optimization failed: {e}")
+            print(f"[ERROR] Bayesian Optimization failed: {e}")
             return None
 
         best_params = optimizer.max['params']
@@ -372,7 +372,7 @@ class BMCScoreOptimizer:
         scores = self.compute_custom_score(best_weights, use_aggressive=False)
         best_metrics = self.evaluate_scoring(scores)
 
-        print(f"\n✅ Bayesian Optimization Complete!")
+        print(f"\nBayesian Optimization Complete!")
         print(f"Best ROC-AUC: {best_metrics['roc_auc']:.4f}")
         print(f"Best Score Gap: {best_metrics['score_gap']:.4f}")
         print(f"\nOptimal Weights:")
@@ -387,22 +387,22 @@ class BMCScoreOptimizer:
 
     def xgboost_method(self, use_cv: bool = True, cv_folds: int = 5) -> Dict:
         """
-        使用XGBoost学习最优分类器
+        Learn the best classifier with XGBoost.
         
         Args:
-            use_cv: 是否使用交叉验证（强烈推荐）
-            cv_folds: 交叉验证的折数
+            use_cv: Whether to use cross-validation (strongly recommended)
+            cv_folds: Number of cross-validation folds
         """
         if not HAS_XGBOOST:
-            print("❌ XGBoost not available")
+            print("[ERROR] XGBoost not available")
             return None
 
         print(f"\n{'=' * 60}")
-        print("🌲 Method 3: XGBoost Classifier")
+        print("Method 3: XGBoost Classifier")
         if use_cv:
             print(f"   Using {cv_folds}-Fold Cross-Validation")
         else:
-            print("   ⚠️  WARNING: Training on full dataset (may overfit)")
+            print("   [WARN] Training on full dataset (may overfit)")
         print(f"{'=' * 60}")
 
         X_clean = self.X.copy()
@@ -410,7 +410,7 @@ class BMCScoreOptimizer:
         
         print(f"Training data shape: {X_clean.shape}")
 
-        # 创建模型
+        # Create the model
         model = xgb.XGBClassifier(
             n_estimators=100,
             max_depth=5,
@@ -420,11 +420,11 @@ class BMCScoreOptimizer:
         )
 
         if use_cv:
-            # 🔥 使用交叉验证获取out-of-fold预测
-            print("\n🔄 Performing cross-validation...")
+            # Use cross-validation to obtain out-of-fold predictions
+            print("\nPerforming cross-validation...")
             cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
             
-            # 获取交叉验证的预测概率
+            # Out-of-fold predicted probabilities
             scores = cross_val_predict(
                 model, X_clean, self.y, 
                 cv=cv, 
@@ -432,7 +432,7 @@ class BMCScoreOptimizer:
                 n_jobs=-1
             )[:, 1]
             
-            # 计算交叉验证的ROC-AUC
+            # Cross-validated ROC-AUC
             cv_scores = cross_val_score(
                 model, X_clean, self.y,
                 cv=cv,
@@ -440,31 +440,31 @@ class BMCScoreOptimizer:
                 n_jobs=-1
             )
             
-            print(f"✓ Cross-validation ROC-AUC: {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
+            print(f"[OK] Cross-validation ROC-AUC: {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
             
-            # 在全部数据上训练最终模型（用于特征重要性）
+            # Fit the final model on all data to obtain feature importances
             model.fit(X_clean, self.y)
             
         else:
-            # 训练并在训练集上评估（会过拟合）
+            # Train and evaluate on the same data (overfits)
             model.fit(X_clean, self.y)
             scores = model.predict_proba(X_clean)[:, 1]
-            print("⚠️  Evaluating on training set - metrics will be optimistic!")
+            print("[WARN] Evaluating on training set - metrics will be optimistic!")
 
-        # 评估
+        # Evaluation
         metrics = self.evaluate_scoring(scores)
 
-        # 特征重要性
+        # Feature importances
         feature_importance = dict(zip(self.feature_names, model.feature_importances_))
 
-        # 归一化为权重
+        # Normalize the importances into weights
         total_importance = sum(feature_importance.values())
         if total_importance > 0:
             weights = {k: v / total_importance for k, v in feature_importance.items()}
         else:
             weights = {k: 1.0 / len(self.feature_names) for k in self.feature_names}
 
-        print(f"\n✅ XGBoost Training Complete!")
+        print(f"\nXGBoost Training Complete!")
         if use_cv:
             print(f"Cross-Validation ROC-AUC: {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
         print(f"Out-of-Fold ROC-AUC: {metrics['roc_auc']:.4f}")
@@ -492,14 +492,14 @@ class BMCScoreOptimizer:
 
     def logistic_regression_method(self, use_cv: bool = True, cv_folds: int = 5) -> Dict:
         """
-        使用逻辑回归学习线性权重
+        Learn linear weights with logistic regression.
         
         Args:
-            use_cv: 是否使用交叉验证
-            cv_folds: 交叉验证的折数
+            use_cv: Whether to use cross-validation
+            cv_folds: Number of cross-validation folds
         """
         print(f"\n{'=' * 60}")
-        print("📈 Method 4: Logistic Regression")
+        print("Method 4: Logistic Regression")
         if use_cv:
             print(f"   Using {cv_folds}-Fold Cross-Validation")
         print(f"{'=' * 60}")
@@ -515,7 +515,7 @@ class BMCScoreOptimizer:
         )
 
         if use_cv:
-            print("\n🔄 Performing cross-validation...")
+            print("\nPerforming cross-validation...")
             cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
             
             scores = cross_val_predict(
@@ -532,7 +532,7 @@ class BMCScoreOptimizer:
                 n_jobs=-1
             )
             
-            print(f"✓ Cross-validation ROC-AUC: {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
+            print(f"[OK] Cross-validation ROC-AUC: {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
             
             model.fit(X_scaled, self.y)
         else:
@@ -544,7 +544,7 @@ class BMCScoreOptimizer:
         coefficients = np.abs(model.coef_[0])
         weights = dict(zip(self.feature_names, coefficients / coefficients.sum()))
 
-        print(f"\n✅ Logistic Regression Training Complete!")
+        print(f"\nLogistic Regression Training Complete!")
         if use_cv:
             print(f"Cross-Validation ROC-AUC: {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
         print(f"Out-of-Fold ROC-AUC: {metrics['roc_auc']:.4f}")
@@ -572,9 +572,9 @@ class BMCScoreOptimizer:
         return result
 
     def compare_methods(self, results: List[Dict], output_dir: Path):
-        """对比不同方法的效果"""
+        """Compare the effectiveness of the different methods."""
         print(f"\n{'=' * 60}")
-        print("📊 Comparing All Methods")
+        print("Comparing All Methods")
         print(f"{'=' * 60}")
 
         comparison_data = []
@@ -595,7 +595,7 @@ class BMCScoreOptimizer:
                 'Mean(Wrong)': metrics['mean_wrong'],
             }
             
-            # 添加交叉验证信息
+            # Attach cross-validation information
             if 'cv_mean' in result:
                 row['CV ROC-AUC'] = result['cv_mean']
                 row['CV Std'] = result['cv_std']
@@ -607,12 +607,12 @@ class BMCScoreOptimizer:
 
         csv_file = output_dir / 'method_comparison.csv'
         df.to_csv(csv_file, index=False)
-        print(f"\n💾 Saved comparison to: {csv_file}")
+        print(f"\nSaved comparison to: {csv_file}")
 
-        # 可视化
+        # Plots
         fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 
-        # 1. ROC-AUC对比
+        # 1. ROC-AUC comparison
         ax = axes[0, 0]
         methods = df['Method'].values
         roc_aucs = df['ROC-AUC'].values
@@ -629,7 +629,7 @@ class BMCScoreOptimizer:
             ax.text(value, bar.get_y() + bar.get_height() / 2,
                     f'{value:.4f}', va='center', ha='left', fontweight='bold')
 
-        # 2. Score Gap对比
+        # 2. Score gap comparison
         ax = axes[0, 1]
         score_gaps = df['Score Gap'].values
         bars = ax.barh(methods, score_gaps, color=colors, edgecolor='black', linewidth=1.5)
@@ -641,7 +641,7 @@ class BMCScoreOptimizer:
             ax.text(value, bar.get_y() + bar.get_height() / 2,
                     f'{value:.4f}', va='center', ha='left', fontweight='bold')
 
-        # 3. 权重对比
+        # 3. Weight comparison
         ax = axes[1, 0]
         weights_data = []
         weights_methods = []
@@ -667,7 +667,7 @@ class BMCScoreOptimizer:
             ax.legend()
             ax.grid(alpha=0.3, axis='y')
 
-        # 4. Accuracy对比
+        # 4. Accuracy comparison
         ax = axes[1, 1]
         accuracies = df['Best Accuracy'].values
         bars = ax.barh(methods, accuracies, color=colors, edgecolor='black', linewidth=1.5)
@@ -682,11 +682,11 @@ class BMCScoreOptimizer:
         plt.tight_layout()
         plot_file = output_dir / 'method_comparison.png'
         plt.savefig(plot_file, dpi=200, bbox_inches='tight')
-        print(f"📊 Saved comparison plot to: {plot_file}")
+        print(f"Saved comparison plot to: {plot_file}")
         plt.close()
 
     def generate_code_snippet(self, result: Dict) -> str:
-        """生成可直接使用的代码片段"""
+        """Generate a ready-to-use code snippet for the optimized formula."""
         if result is None or 'weights' not in result:
             return ""
 
@@ -715,7 +715,7 @@ def compute_consistency_score_optimized(
     avg_confidence: float,
 ) -> float:
     """
-    使用{method}优化后的一致性评分公式
+    Consistency scoring formula optimized with {method}.
     """
     consistency_score = (
         {weights.get('token_accuracy', 0):.4f} * token_accuracy +
@@ -733,7 +733,7 @@ def compute_consistency_score_optimized(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="优化BMC一致性评分公式（使用交叉验证）",
+        description="Optimize the BMC consistency scoring formula (with cross-validation)",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
 
@@ -745,8 +745,8 @@ def main():
                         choices=['all', 'grid', 'bayes', 'xgboost', 'logistic'])
     parser.add_argument("--grid_samples", type=int, default=1000)
     parser.add_argument("--bayes_iter", type=int, default=50)
-    parser.add_argument("--cv_folds", type=int, default=5, help="交叉验证折数")
-    parser.add_argument("--no_cv", action='store_true', help="禁用交叉验证（不推荐）")
+    parser.add_argument("--cv_folds", type=int, default=5, help="Number of cross-validation folds")
+    parser.add_argument("--no_cv", action='store_true', help="Disable cross-validation (not recommended)")
 
     args = parser.parse_args()
 
@@ -760,7 +760,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{'=' * 80}")
-    print(f"🔬 BMC Consistency Score Optimization Tool (Cross-Validation)")
+    print(f"BMC Consistency Score Optimization Tool (Cross-Validation)")
     print(f"{'=' * 80}")
     print(f"Task: {args.dataset.upper()}")
     print(f"Output: {output_dir.absolute()}")
@@ -773,7 +773,7 @@ def main():
         optimizer = BMCScoreOptimizer(pattern, args.dataset)
 
         print(f"\n{'=' * 60}")
-        print("📍 Current Formula Performance")
+        print("Current Formula Performance")
         print(f"{'=' * 60}")
         current_scores = np.array([d['current_score'] for d in optimizer.data])
         current_metrics = optimizer.evaluate_scoring(current_scores)
@@ -805,7 +805,7 @@ def main():
             best_result = max(valid_results, key=lambda x: x['metrics']['roc_auc'])
 
             print(f"\n{'=' * 60}")
-            print(f"🏆 Best Method: {best_result['method'].upper()}")
+            print(f"Best Method: {best_result['method'].upper()}")
             print(f"{'=' * 60}")
             if 'cv_mean' in best_result:
                 print(f"Cross-Validation ROC-AUC: {best_result['cv_mean']:.4f} (+/- {best_result['cv_std']:.4f})")
@@ -818,7 +818,7 @@ def main():
             with open(code_file, 'w') as f:
                 f.write(code_snippet)
 
-            print(f"\n💾 Saved optimized formula to: {code_file}")
+            print(f"\nSaved optimized formula to: {code_file}")
 
         results_file = output_dir / 'optimization_results.json'
 
@@ -851,13 +851,13 @@ def main():
                 'optimized_results': save_results
             }, f, indent=2)
 
-        print(f"\n💾 Saved full results to: {results_file}")
+        print(f"\nSaved full results to: {results_file}")
         print(f"\n{'=' * 80}")
-        print(f"✅ Optimization Complete!")
+        print(f"Optimization Complete!")
         print(f"{'=' * 80}\n")
 
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\n[ERROR] {e}")
         import traceback
         traceback.print_exc()
 

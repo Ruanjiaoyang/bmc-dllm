@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
 def setup_publication_style():
-    """设置针对单栏宽度优化的 Times New Roman 学术风格"""
+    """Configure a Times New Roman publication style tuned for single-column width."""
     plt.rcParams.update({
         'font.family': 'serif',
         'font.serif': ['Times New Roman', 'DejaVu Serif'],
@@ -23,13 +23,13 @@ def setup_publication_style():
         'mathtext.fontset': 'stix',
     })
 
-# 配色保持一致
+# Shared color palette across all subplots
 COLOR_AUROC = '#16A085' 
 COLOR_AUPR = '#8E44AD'  
 COLOR_OPT = '#E67E22'  
 
 def plot_backward_steps(ax):
-    """子图(a): Backward Steps"""
+    """Subplot (a): Backward Steps."""
     steps = np.array([4, 16, 64, 128])
     auroc = np.array([0.840, 0.873, 0.875, 0.879])
     aupr = np.array([0.913, 0.923, 0.929, 0.928])
@@ -50,7 +50,7 @@ def plot_backward_steps(ax):
     return [l1, l2]
 
 def plot_masking_ratio(ax):
-    """子图(b): Masking Ratio (原来的c)"""
+    """Subplot (b): Masking Ratio (formerly subplot c)."""
     gamma = np.array([0.0, 0.3, 0.5, 0.7, 0.9, 1.0])
     auroc = np.array([0.598, 0.672, 0.712, 0.794, 0.889, 0.712])
     aupr = np.array([0.753, 0.794, 0.816, 0.873, 0.937, 0.861])
@@ -69,7 +69,7 @@ def plot_masking_ratio(ax):
     ax.grid(True, linestyle='--', which='major', color='grey', alpha=0.3)
 
 def plot_ensemble_size_single(ax):
-    """单独的Ensemble Size图"""
+    """Standalone Ensemble Size plot."""
     n = np.array([1, 2, 4, 8])
     auroc = np.array([0.784, 0.829, 0.889, 0.905])
     aupr = np.array([0.870, 0.887, 0.937, 0.945])
@@ -93,21 +93,21 @@ def plot_ensemble_size_single(ax):
     return [l1, l2]
 
 def create_main_ablation_figure(output_path='ablation_main.pdf'):
-    """生成主图：(a) Backward Steps + (b) Masking Ratio"""
+    """Build the main figure: (a) Backward Steps + (b) Masking Ratio."""
     setup_publication_style()
     
-    # 调整高度：从5.5改为4.0，使图更扁
+    # Height reduced from 5.5 to 4.0 to give the figure a flatter aspect ratio
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.0), facecolor='white')
     
     handles = plot_backward_steps(axes[0])
     plot_masking_ratio(axes[1])
     
-    # 添加Selected Value线到legend
+    # Add the "Selected Value" marker line to the legend
     opt_line = Line2D([0], [0], color=COLOR_OPT, linestyle='--', 
                      linewidth=2, label='Selected Value')
     handles.append(opt_line)
 
-    # 全局legend
+    # Shared figure-level legend
     fig.legend(handles=handles, 
                loc='lower center', 
                bbox_to_anchor=(0.5, -0.05), 
@@ -118,14 +118,14 @@ def create_main_ablation_figure(output_path='ablation_main.pdf'):
     plt.tight_layout(rect=[0, 0.05, 1, 0.95])
     
     plt.savefig(output_path, format='pdf', dpi=300, bbox_inches='tight')
-    print(f"✅ Main figure saved: {output_path}")
+    print(f"[OK] Main figure saved: {output_path}")
     plt.close()
 
 def create_ensemble_figure(output_path='ablation_ensemble.pdf'):
-    """生成单独的Ensemble Size图（用于Appendix）"""
+    """Build the standalone Ensemble Size figure (used in the appendix)."""
     setup_publication_style()
     
-    # 同比例调整：主图从5.5->4.0，附录图从5->3.6
+    # Scaled consistently with the main figure: 5.5 -> 4.0 there, 5 -> 3.6 here
     fig, ax = plt.subplots(1, 1, figsize=(6, 3.6), facecolor='white')
     
     plot_ensemble_size_single(ax)
@@ -133,16 +133,16 @@ def create_ensemble_figure(output_path='ablation_ensemble.pdf'):
     plt.tight_layout()
     
     plt.savefig(output_path, format='pdf', dpi=300, bbox_inches='tight')
-    print(f"✅ Ensemble figure saved: {output_path}")
+    print(f"[OK] Ensemble figure saved: {output_path}")
     plt.close()
 
 if __name__ == "__main__":
-    # 生成主图（Main text用）
+    # Main-text figure
     create_main_ablation_figure('ablation_main.pdf')
     
-    # 生成Ensemble Size图（Appendix用）
+    # Appendix Ensemble Size figure
     create_ensemble_figure('ablation_ensemble.pdf')
     
-    print("\n✅ All figures generated successfully!")
+    print("\n[OK] All figures generated successfully!")
     print("   - ablation_main.pdf: For main text (2 subplots)")
     print("   - ablation_ensemble.pdf: For appendix (1 plot)")

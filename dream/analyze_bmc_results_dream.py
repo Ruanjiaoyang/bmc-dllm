@@ -1,18 +1,18 @@
 """
-Dream BMC 结果分析脚本（修复版 + 框架适配）
-适配 eval_instruct 项目的 BMC 结果格式
-支持 GSM8K, MATH, GPQA, ARC 等任务
+Dream BMC result analysis script
+Works with the BMC result format produced by the eval_instruct project
+Supports tasks such as GSM8K, MATH, GPQA and ARC
 
-主要修复：
-1. ✅ 使用真实的 is_correct 标签（而非 BMC 的 final_answer_match）
-2. ✅ 避免循环论证：用真实正确性评估BMC区分能力
-3. ✅ 更准确的可视化标签
+Key design choices:
+1. Use the real is_correct label (not BMC's own final_answer_match)
+2. Avoid circular reasoning: judge BMC's discriminative power against ground truth
+3. Use accurate labels in the plots
 
-框架适配（2026-01-21）：
-1. ✅ 支持新的数据格式（generations字段）
-2. ✅ 显示优化权重信息
-3. ✅ 兼容 task_name, task_config 等新字段
-4. ✅ 更好的错误处理和日志输出
+Framework compatibility:
+1. Supports the newer data format (generations field)
+2. Reports which optimized weights were used
+3. Handles the newer task_name / task_config fields
+4. Improved error handling and logging
 
 python analyze_bmc_results_dream.py \
   --result_dir results_bmc \
@@ -32,7 +32,7 @@ import argparse
 
 
 class Logger:
-    """双输出 logger：同时输出到控制台和文件"""
+    """Tee logger: writes to both the console and a log file."""
 
     def __init__(self, log_file):
         self.terminal = sys.stdout
@@ -51,7 +51,7 @@ class Logger:
 
 
 def load_results(pattern):
-    """加载所有匹配的 JSON 结果文件"""
+    """Load every JSON result file matching the given glob pattern."""
     files = glob.glob(pattern)
     all_data = []
     config = None
@@ -66,9 +66,9 @@ def load_results(pattern):
             with open(file, 'r') as f:
                 data = json.load(f)
 
-                # 兼容两种格式
-                # 格式1: {"results": [...]}
-                # 格式2: {"generations": [...]}
+                # Accept both layouts
+                # Layout 1: {"results": [...]}
+                # Layout 2: {"generations": [...]}
                 results = data.get('results', data.get('generations', []))
                 all_data.extend(results)
 
@@ -76,11 +76,11 @@ def load_results(pattern):
                     config = data['bmc_config']
                     config['task_name'] = data.get('task_name', 'unknown')
 
-                print(f"  ✓ Loaded {len(results)} samples from {Path(file).name}")
+                print(f"  [OK] Loaded {len(results)} samples from {Path(file).name}")
         except Exception as e:
-            print(f"  ⚠️  Error loading {file}: {e}")
+            print(f"  [WARN] Error loading {file}: {e}")
 
-    # 打印配置信息
+    # Print the BMC configuration
     if config:
         print(f"\nBMC Configuration:")
         print(f"  Task: {config.get('task_name', 'N/A')}")
@@ -90,9 +90,9 @@ def load_results(pattern):
         print(f"  num_samples: {config.get('num_samples', 1)}")
         print(f"  aggressive_scoring: {config.get('aggressive_scoring', False)}")
         
-        # 🔥 NEW: 显示优化权重信息
+        # Report which optimized weights, if any, were used
         if config.get('using_optimized_weights', False):
-            print(f"  ✅ Using optimized weights: True")
+            print(f"  [OK] Using optimized weights: True")
             weights_path = config.get('weights_path', 'N/A')
             if weights_path and weights_path != 'N/A':
                 print(f"     Weights file: {weights_path}")
@@ -105,32 +105,32 @@ def load_results(pattern):
 
 def analyze_bmc_effectiveness(results, verbose=True):
     """
-    分析 BMC 是否能有效区分正确/错误答案（修复版 + 框架适配）
+    Analyze whether BMC can separate correct from wrong answers.
 
-    核心修复：
-    - 使用真实的 is_correct 标签（来自 ground truth 比较）
-    - 而非使用 BMC 的 final_answer_match（这会导致循环论证）
-    
-    框架适配：
-    - 支持新的数据格式（generations字段）
-    - 兼容优化权重的结果
-    - 更好的错误处理
+    Core idea:
+    - Use the real is_correct label (derived from a ground-truth comparison)
+    - Not BMC's own final_answer_match, which would make the argument circular
+
+    Framework compatibility:
+    - Supports the newer data format (generations field)
+    - Works with results produced using optimized weights
+    - Improved error handling
 
     Args:
-        results: 加载的结果列表，每个元素应包含 is_correct 和 bmc_scores
-        verbose: 是否打印详细信息
+        results: Loaded result list; each item should carry is_correct and bmc_scores
+        verbose: Whether to print detailed output
 
     Returns:
-        分析结果字典，包含正确/错误样本的BMC分数统计
+        Dict of analysis results with BMC score statistics for correct/wrong samples
     """
 
-    correct_samples = []  # 模型答对的样本
-    wrong_samples = []    # 模型答错的样本
+    correct_samples = []  # Samples the model answered correctly
+    wrong_samples = []    # Samples the model answered incorrectly
     skipped = 0
     missing_labels = 0
 
     for idx, item in enumerate(results):
-        # ✅ 修复：使用真实的 is_correct 标签
+        # Use the real is_correct label
         is_correct = item.get('is_correct')
 
         if is_correct is None:
@@ -164,7 +164,7 @@ def analyze_bmc_effectiveness(results, verbose=True):
             't_probe_used': bmc_scores.get('t_probe_used', 0.0),
         }
 
-        # 根据真实正确性分组
+        # Group by ground-truth correctness
         if is_correct:
             correct_samples.append(sample_data)
         else:
@@ -178,28 +178,28 @@ def analyze_bmc_effectiveness(results, verbose=True):
         print(f"Valid samples: {len(correct_samples) + len(wrong_samples)}")
         print(f"Missing is_correct labels: {missing_labels}")
         print(f"Skipped (BMC error): {skipped}")
-        print(f"\n✅ Correct answers (model got right): {len(correct_samples)}")
-        print(f"❌ Wrong answers (model got wrong): {len(wrong_samples)}")
+        print(f"\n[OK] Correct answers (model got right): {len(correct_samples)}")
+        print(f"[ERROR] Wrong answers (model got wrong): {len(wrong_samples)}")
 
         total_valid = len(correct_samples) + len(wrong_samples)
         if total_valid > 0:
-            print(f"\n📊 Model Accuracy: {len(correct_samples) / total_valid:.2%}")
+            print(f"\nModel Accuracy: {len(correct_samples) / total_valid:.2%}")
 
     if missing_labels > 0:
-        print(f"\n⚠️  WARNING: {missing_labels} samples missing is_correct labels!")
+        print(f"\n[WARN] WARNING: {missing_labels} samples missing is_correct labels!")
         print(f"   These samples will be excluded from analysis.")
         print(f"   Make sure your evaluation script saves the is_correct field.")
 
     if len(correct_samples) == 0 or len(wrong_samples) == 0:
         if verbose:
-            print("\n❌ Cannot compute metrics: need both correct and wrong samples")
+            print("\n[ERROR] Cannot compute metrics: need both correct and wrong samples")
             if len(correct_samples) == 0:
                 print("   No correct samples found!")
             if len(wrong_samples) == 0:
                 print("   No wrong samples found!")
         return None
 
-    # 计算统计指标
+    # Compute summary statistics
     correct_scores = [s['consistency_score'] for s in correct_samples]
     wrong_scores = [s['consistency_score'] for s in wrong_samples]
 
@@ -209,26 +209,26 @@ def analyze_bmc_effectiveness(results, verbose=True):
         print(f"\n{'=' * 60}")
         print("BMC Consistency Scores:")
         print(f"{'=' * 60}")
-        print(f"✅ CORRECT answers (n={len(correct_samples)}):")
+        print(f"[OK] CORRECT answers (n={len(correct_samples)}):")
         print(f"  Mean:   {np.mean(correct_scores):.4f}")
         print(f"  Std:    {np.std(correct_scores):.4f}")
         print(f"  Median: {np.median(correct_scores):.4f}")
         print(f"  Range:  [{np.min(correct_scores):.4f}, {np.max(correct_scores):.4f}]")
 
-        print(f"\n❌ WRONG answers (n={len(wrong_samples)}):")
+        print(f"\n[ERROR] WRONG answers (n={len(wrong_samples)}):")
         print(f"  Mean:   {np.mean(wrong_scores):.4f}")
         print(f"  Std:    {np.std(wrong_scores):.4f}")
         print(f"  Median: {np.median(wrong_scores):.4f}")
         print(f"  Range:  [{np.min(wrong_scores):.4f}, {np.max(wrong_scores):.4f}]")
 
-        print(f"\n📊 Score Gap (Correct - Wrong): {score_gap:.4f}")
+        print(f"\nScore Gap (Correct - Wrong): {score_gap:.4f}")
 
         if score_gap > 0:
-            print(f"   ✓ Positive gap: BMC scores are higher for correct answers")
+            print(f"   [OK] Positive gap: BMC scores are higher for correct answers")
         else:
-            print(f"   ✗ Negative gap: BMC scores are LOWER for correct answers (bad!)")
+            print(f"   [ERROR] Negative gap: BMC scores are LOWER for correct answers (bad!)")
 
-    # ROC-AUC 计算
+    # ROC-AUC computation
     labels = [1] * len(correct_samples) + [0] * len(wrong_samples)
     scores = correct_scores + wrong_scores
 
@@ -244,34 +244,34 @@ def analyze_bmc_effectiveness(results, verbose=True):
             print(f"\n{'=' * 60}")
             print("Classification Metrics:")
             print(f"{'=' * 60}")
-            print(f"🎯 ROC-AUC: {roc_auc:.4f}")
-            print(f"🎯 PR-AUC:  {pr_auc:.4f}")
+            print(f"ROC-AUC: {roc_auc:.4f}")
+            print(f"PR-AUC:  {pr_auc:.4f}")
 
-            # 评估BMC有效性
+            # Judge BMC effectiveness
             success = roc_auc > 0.75 and score_gap > 0.15
             print(f"\n{'=' * 60}")
             if success:
-                print("✅ BMC is HIGHLY EFFECTIVE!")
-                print(f"   ROC-AUC > 0.75 ✓ (got {roc_auc:.4f})")
-                print(f"   Score Gap > 0.15 ✓ (got {score_gap:.4f})")
+                print("[OK] BMC is HIGHLY EFFECTIVE!")
+                print(f"   ROC-AUC > 0.75 [OK] (got {roc_auc:.4f})")
+                print(f"   Score Gap > 0.15 [OK] (got {score_gap:.4f})")
                 print("\n   Interpretation:")
                 print("   - BMC can reliably distinguish correct from wrong answers")
                 print("   - Can be used for uncertainty estimation without labels")
             elif roc_auc > 0.70 and score_gap > 0.10:
-                print("⚠️  BMC is MARGINALLY EFFECTIVE")
+                print("[WARN] BMC is MARGINALLY EFFECTIVE")
                 print(f"   ROC-AUC: {roc_auc:.4f} (good if > 0.75)")
                 print(f"   Score Gap: {score_gap:.4f} (good if > 0.15)")
                 print("\n   Interpretation:")
                 print("   - BMC shows some signal but not strong enough")
                 print("   - Consider tuning t_probe or num_reverse_steps")
             else:
-                print("❌ BMC needs improvement")
+                print("[ERROR] BMC needs improvement")
                 if roc_auc <= 0.70:
                     print(f"   ROC-AUC too low: {roc_auc:.4f} (need > 0.75)")
                 if score_gap <= 0.10:
                     print(f"   Score gap too small: {score_gap:.4f} (need > 0.15)")
                 if score_gap < 0:
-                    print(f"   ⚠️  NEGATIVE gap: BMC is anti-correlated with correctness!")
+                    print(f"   [WARN] NEGATIVE gap: BMC is anti-correlated with correctness!")
                 print("\n   Recommendations:")
                 print("   - Try different t_probe values (0.85, 0.90, 0.95)")
                 print("   - Increase num_reverse_steps")
@@ -280,12 +280,12 @@ def analyze_bmc_effectiveness(results, verbose=True):
 
     except Exception as e:
         if verbose:
-            print(f"\n⚠️  Error computing metrics: {e}")
+            print(f"\n[WARN] Error computing metrics: {e}")
 
-    # 计算额外的相关性指标
+    # Compute additional correlation metrics
     correlation_metrics = {}
     try:
-        # BMC各指标与正确性的相关性
+        # Correlation between each BMC metric and correctness
         all_samples = correct_samples + wrong_samples
         all_labels = [1] * len(correct_samples) + [0] * len(wrong_samples)
 
@@ -308,14 +308,14 @@ def analyze_bmc_effectiveness(results, verbose=True):
                 corr = np.corrcoef(all_labels, metric_values)[0, 1]
                 correlation_metrics[metric] = corr
                 if verbose:
-                    symbol = "✓" if corr > 0.3 else "⚠️" if corr > 0 else "✗"
+                    symbol = "[OK]" if corr > 0.3 else "[WARN]" if corr > 0 else "[ERROR]"
                     print(f"{symbol} {metric:25s}: {corr:+.4f}")
             except:
                 pass
 
     except Exception as e:
         if verbose:
-            print(f"\n⚠️  Error computing correlations: {e}")
+            print(f"\n[WARN] Error computing correlations: {e}")
 
     return {
         'correct_samples': correct_samples,
@@ -345,14 +345,14 @@ def analyze_bmc_effectiveness(results, verbose=True):
 
 
 def plot_results(correct_samples, wrong_samples, roc_auc, task_name, output_dir):
-    """可视化 BMC 分数分布（修复版：使用真实标签）"""
+    """Visualize the BMC score distribution using ground-truth labels."""
     correct_scores = [s['consistency_score'] for s in correct_samples]
     wrong_scores = [s['consistency_score'] for s in wrong_samples]
 
     plt.style.use('seaborn-v0_8-darkgrid')
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 
-    # 1. 分布对比（修复：标签改为 Correct/Wrong）
+    # 1. Distribution comparison, labelled Correct/Wrong
     ax = axes[0, 0]
     bins = np.linspace(0, 1, 21)
     ax.hist(correct_scores, bins=bins, alpha=0.7, label='Correct Answers',
@@ -370,7 +370,7 @@ def plot_results(correct_samples, wrong_samples, roc_auc, task_name, output_dir)
     ax.legend(fontsize=10, loc='upper left')
     ax.grid(alpha=0.3)
 
-    # 2. ROC 曲线
+    # 2. ROC curve
     ax = axes[0, 1]
     if roc_auc is not None:
         labels = [1] * len(correct_scores) + [0] * len(wrong_scores)
@@ -386,7 +386,7 @@ def plot_results(correct_samples, wrong_samples, roc_auc, task_name, output_dir)
     ax.legend(fontsize=10, loc='lower right')
     ax.grid(alpha=0.3)
 
-    # 3. 置信度 vs 一致性分数
+    # 3. Confidence vs consistency score
     ax = axes[1, 0]
     correct_conf = [s['avg_confidence'] for s in correct_samples]
     wrong_conf = [s['avg_confidence'] for s in wrong_samples]
@@ -401,7 +401,7 @@ def plot_results(correct_samples, wrong_samples, roc_auc, task_name, output_dir)
     ax.legend(fontsize=10)
     ax.grid(alpha=0.3)
 
-    # 4. Final Answer Match vs Consistency（修复：标签改为 Correct/Wrong）
+    # 4. Final Answer Match vs Consistency, labelled Correct/Wrong
     ax = axes[1, 1]
     correct_fam = [s['final_answer_match'] for s in correct_samples]
     wrong_fam = [s['final_answer_match'] for s in wrong_samples]
@@ -428,19 +428,19 @@ def plot_results(correct_samples, wrong_samples, roc_auc, task_name, output_dir)
     ax.set_title('Score by Answer Correctness & Final Answer Match', fontsize=14, fontweight='bold')
     ax.grid(alpha=0.3, axis='y')
 
-    # 添加注释
+    # Add an explanatory caption
     ax.text(0.5, -0.15, 'FAM = Final Answer Match (BMC can reconstruct final answer)',
             transform=ax.transAxes, ha='center', fontsize=9, style='italic', color='gray')
 
     plt.tight_layout()
     filename = output_dir / f'bmc_analysis_{task_name}.png'
     plt.savefig(filename, dpi=200, bbox_inches='tight')
-    print(f"\n📊 Plot saved to: {filename}")
+    print(f"\nPlot saved to: {filename}")
     plt.close()
 
 
 def save_results(analysis_result, config, output_dir, task_name):
-    """保存分析结果到 JSON 文件"""
+    """Save the analysis results to a JSON file."""
     if analysis_result is None:
         return
 
@@ -467,7 +467,7 @@ def save_results(analysis_result, config, output_dir, task_name):
     with open(json_file, 'w', encoding='utf-8') as f:
         json.dump(results_to_save, f, indent=2, ensure_ascii=False)
 
-    print(f"\n💾 Results saved to: {json_file}")
+    print(f"\nResults saved to: {json_file}")
 
 
 if __name__ == "__main__":
@@ -482,7 +482,7 @@ if __name__ == "__main__":
                         help="Output directory (default: auto-generated with timestamp)")
     args = parser.parse_args()
 
-    # 创建输出目录
+    # Create the output directory
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
@@ -491,21 +491,21 @@ if __name__ == "__main__":
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 设置日志
+    # Set up logging
     log_file = output_dir / "analysis_log.txt"
     logger = Logger(log_file)
     sys.stdout = logger
 
     print(f"\n{'=' * 80}")
-    print(f"🔬 Dream BMC Results Analysis Tool (FIXED VERSION)")
+    print(f"Dream BMC Results Analysis Tool")
     print(f"{'=' * 80}")
     print(f"Task: {args.task_name.upper()}")
     print(f"Output directory: {output_dir.absolute()}")
     print(f"Log file: {log_file}")
-    print(f"\n✅ Fix: Using real is_correct labels (not BMC final_answer_match)")
+    print(f"\n[INFO] Using real is_correct labels (not BMC final_answer_match)")
 
     try:
-        # 构建匹配模式
+        # Build the file match pattern
         if args.t_probe is not None:
             t_probe_str = f"{args.t_probe:.1f}".replace('.', '_')
             pattern = f"{args.result_dir}/{args.task_name}_*t{t_probe_str}*_merged.json"
@@ -515,28 +515,28 @@ if __name__ == "__main__":
         results, config = load_results(pattern)
 
         if len(results) == 0:
-            print(f"\n❌ No results found matching: {pattern}")
+            print(f"\n[ERROR] No results found matching: {pattern}")
             print(f"\nTroubleshooting:")
             print(f"1. Check if files exist: ls {args.result_dir}/{args.task_name}_*.json")
             print(f"2. Make sure you've merged distributed results:")
             print(f"   python merge_distributed_results.py --result_dir {args.result_dir} --dataset {args.task_name}")
         else:
-            # 分析BMC有效性
+            # Analyze BMC effectiveness
             analysis = analyze_bmc_effectiveness(results)
 
             if analysis:
-                # 生成可视化
+                # Generate plots
                 plot_results(analysis['correct_samples'],
                              analysis['wrong_samples'],
                              analysis['roc_auc'],
                              args.task_name,
                              output_dir)
 
-                # 保存结果
+                # Save results
                 save_results(analysis, config, output_dir, args.task_name)
 
         print(f"\n{'=' * 80}")
-        print(f"✅ Analysis complete!")
+        print(f"[OK] Analysis complete!")
         print(f"All outputs saved to: {output_dir.absolute()}")
         print(f"{'=' * 80}\n")
 

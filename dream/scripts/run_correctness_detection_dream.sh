@@ -3,8 +3,8 @@
 cd "$(dirname "$0")/.."
 
 # ============================================================
-# Dream模型 - Correctness Detection实验
-# 对比4种方法：Model Confidence, Self-Consistency, Self-Evaluation, BMC
+# Dream model - Correctness Detection experiments
+# Compares 4 methods: Model Confidence, Self-Consistency, Self-Evaluation, BMC
 # ============================================================
 
 # ============================================================
@@ -13,44 +13,44 @@ cd "$(dirname "$0")/.."
 GPU_IDS=(0 1 2 3 4 5 6 7)
 MASTER_PORT=29500
 
-# 模型路径（需要修改为实际路径）
+# Model path (update to the actual path)
 MODEL_PATH="${MODEL_PATH:-Dream-org/Dream-v0-Instruct-7B}"
 SEMANTIC_MODEL_PATH="${SEMANTIC_MODEL_PATH:-sentence-transformers/all-MiniLM-L6-v2}"
 
-# 实验配置
+# Experiment configuration
 # DATASETS=("gsm8k" "math" "gpqa" "arc")
 read -ra DATASETS <<< "${DATASETS:-gsm8k math arc gpqa}"
-MAX_NEW_TOKENS=128  # 与LLaDA的Correctness Detection实验一致
-DIFFUSION_STEPS=64  # Dream扩散模型的步数
-BATCH_SIZE=8  # 可以使用batch并行加速
+MAX_NEW_TOKENS=128  # Matches the LLaDA Correctness Detection experiments
+DIFFUSION_STEPS=64  # Number of steps for the Dream diffusion model
+BATCH_SIZE=8  # Batching can be used to speed things up
 
-# BMC参数（最佳配置）
+# BMC parameters (best configuration)
 T_PROBE=0.9
 NUM_REVERSE_STEPS=16
 BMC_NUM_SAMPLES=4
 SELF_CONSISTENCY_N=10
 
-# 🔥 优化权重路径（可选）
-# 留空则自动搜索任务对应的最佳权重文件
-# 如果指定路径，将使用该权重文件
-# 如果都没找到，将使用aggressive_scoring策略
+# Optimized weights path (optional)
+# If left empty, the best weight file for the task is searched for automatically
+# If a path is given, that weight file is used
+# If neither is found, the aggressive_scoring strategy is used
 # 
-# 自动搜索规则：
-#   1. 搜索 bmc_optimization_{TASK}_*/optimization_results.json
-#   2. 选择 ROC-AUC 最高的权重文件
+# Auto-search rules:
+#   1. Search bmc_optimization_{TASK}_*/optimization_results.json
+#   2. Pick the weight file with the highest ROC-AUC
 #
-# 示例（手动指定）:
+# Example (manual):
 #   OPTIMIZED_WEIGHTS_PATH="bmc_optimization_gsm8k_20260104_164047/optimization_results.json"
 #
-# 示例（自动搜索，推荐）:
+# Example (auto-search, recommended):
 #   OPTIMIZED_WEIGHTS_PATH=""
 OPTIMIZED_WEIGHTS_PATH=""
 
-# 采样数量
-SUBSAMPLE=-1  # -1表示全部
+# Number of samples to evaluate
+SUBSAMPLE=-1  # -1 means use the full dataset
 
 # Set GPUs from command line
-# 支持 --force 参数强制重新运行
+# Supports a --force argument to force a re-run
 FORCE_RERUN=false
 if [ $# -gt 0 ]; then
   GPU_IDS=()
@@ -67,25 +67,25 @@ GPU_LIST=$(IFS=,; echo "${GPU_IDS[*]}")
 NUM_GPUS=${#GPU_IDS[@]}
 
 echo "========================================================================"
-echo "🔬 Dream模型 - Correctness Detection实验"
+echo "Dream model - Correctness Detection experiments"
 echo "========================================================================"
 echo "Using GPUs: $GPU_LIST (nproc_per_node=$NUM_GPUS)"
 echo "Model: $MODEL_PATH"
 echo ""
-echo "实验方法："
-echo "  1. Model Confidence - 生成时的平均token概率"
-echo "  2. Self-Consistency - 多次生成(N=$SELF_CONSISTENCY_N) + majority voting"
-echo "  3. Self-Evaluation - 让模型评估自己的答案"
-echo "  4. BMC - 双向流形一致性 (BMC)（我们的方法）"
+echo "Methods:"
+echo "  1. Model Confidence - average token probability during generation"
+echo "  2. Self-Consistency - multiple generations (N=$SELF_CONSISTENCY_N) + majority voting"
+echo "  3. Self-Evaluation - the model evaluates its own answer"
+echo "  4. BMC - Bidirectional Manifold Consistency (our method)"
 echo ""
-echo "实验参数："
+echo "Experiment parameters:"
 echo "  - Datasets: ${DATASETS[@]}"
 echo "  - Batch size: $BATCH_SIZE"
 echo "  - Max new tokens: $MAX_NEW_TOKENS"
 echo "  - Diffusion steps: $DIFFUSION_STEPS"
 echo "  - Subsample: $SUBSAMPLE"
 echo ""
-echo "BMC配置："
+echo "BMC configuration:"
 echo "  - t_probe: $T_PROBE"
 echo "  - num_reverse_steps: $NUM_REVERSE_STEPS"
 echo "  - bmc_num_samples: $BMC_NUM_SAMPLES"
@@ -97,56 +97,56 @@ else
 fi
 echo "========================================================================"
 
-# 检查模型
+# Check the models
 if [ ! -d "$MODEL_PATH" ]; then
-  echo "❌ ERROR: Model not found at $MODEL_PATH"
+  echo "[ERROR] Model not found at $MODEL_PATH"
   echo "Please update MODEL_PATH in this script"
   exit 1
 fi
 
 if [ ! -d "$SEMANTIC_MODEL_PATH" ]; then
-  echo "❌ ERROR: Semantic model not found at $SEMANTIC_MODEL_PATH"
+  echo "[ERROR] Semantic model not found at $SEMANTIC_MODEL_PATH"
   echo "Please update SEMANTIC_MODEL_PATH in this script"
   exit 1
 fi
 
 # ============================================================
-# 函数：检查结果文件是否已存在
+# Function: check whether a result file already exists
 # ============================================================
 check_result_exists() {
   local dataset=$1
   local output_dir=$2
   
-  # 检查merged结果文件
+  # Check for the merged result file
   local merged_file="${output_dir}/${dataset}_dream_merged.json"
   
   if [ -f "$merged_file" ]; then
-    return 0  # 文件存在
+    return 0  # File exists
   else
-    return 1  # 文件不存在
+    return 1  # File does not exist
   fi
 }
 
 # ============================================================
-# 运行实验
+# Run experiments
 # ============================================================
 
 for dataset in "${DATASETS[@]}"; do
   echo ""
   echo "========================================================================"
-  echo "🎯 Dataset: $dataset"
+  echo "Dataset: $dataset"
   echo "========================================================================"
   
-  # 🔥 检查结果是否已存在
+  # Skip if results already exist
   if [ "$FORCE_RERUN" = false ] && check_result_exists "$dataset" "results_correctness_detection_dream"; then
-    echo "  ⏭️  Skipping: Results already exist for $dataset"
+    echo "  Skipping: Results already exist for $dataset"
     echo "  File: results_correctness_detection_dream/${dataset}_dream_merged.json"
     echo "  To re-run, delete the file or use --force flag"
     echo "------------------------------------------------------------------------"
     continue
   fi
 
-  # 构建命令
+  # Build the command
   cmd="CUDA_VISIBLE_DEVICES=$GPU_LIST torchrun \
     --nproc_per_node $NUM_GPUS \
     --master_port $MASTER_PORT \
@@ -164,41 +164,41 @@ for dataset in "${DATASETS[@]}"; do
     --subsample $SUBSAMPLE \
     --output_dir results_correctness_detection_dream"
   
-  # 🔥 添加优化权重路径（如果设置）
+  # Add the optimized weights path (if set)
   if [ ! -z "$OPTIMIZED_WEIGHTS_PATH" ]; then
     if [ -f "$OPTIMIZED_WEIGHTS_PATH" ]; then
       cmd="$cmd --optimized_weights_path \"$OPTIMIZED_WEIGHTS_PATH\""
-      echo "  ✅ Using optimized weights (manual): $OPTIMIZED_WEIGHTS_PATH"
+      echo "  [OK] Using optimized weights (manual): $OPTIMIZED_WEIGHTS_PATH"
     else
-      echo "  ⚠️  Warning: Optimized weights file not found: $OPTIMIZED_WEIGHTS_PATH"
+      echo "  [WARN] Optimized weights file not found: $OPTIMIZED_WEIGHTS_PATH"
       echo "  Continuing with auto-search or aggressive_scoring..."
     fi
   else
-    echo "  🔍 Auto-search enabled: will search for best weights in bmc_optimization_${dataset}_*/"
+    echo "  Auto-search enabled: will search for best weights in bmc_optimization_${dataset}_*/"
   fi
   
-  # 执行命令
+  # Execute the command
   eval $cmd
   
   if [ $? -eq 0 ]; then
-    echo "✓ Completed: $dataset"
+    echo "[OK] Completed: $dataset"
   else
-    echo "❌ Failed: $dataset"
+    echo "[ERROR] Failed: $dataset"
   fi
   echo "------------------------------------------------------------------------"
 done
 
 # ============================================================
-# 分析结果
+# Analyze results
 # ============================================================
 echo ""
 echo "========================================================================"
-echo "✅ All Experiments Completed!"
+echo "[OK] All Experiments Completed!"
 echo "========================================================================"
 echo ""
 echo "Results saved to: results_correctness_detection_dream/"
 echo ""
-echo "生成分析报告："
+echo "Generate the analysis report:"
 echo "  python analyze_correctness_detection_dream.py \\\\"
 echo "    --result_dir results_correctness_detection_dream \\\\"
 echo "    --datasets gsm8k math gpqa arc"
