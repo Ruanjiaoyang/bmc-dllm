@@ -1,0 +1,29 @@
+{
+  "task": "arc",
+  "model": "LLaDA-8B-Instruct",
+  "description": "BMC aggregation weights lambda_k (Sec. 4.1) searched on held-out generations; loaded automatically by the evaluation scripts.",
+  "source_run": "bmc_optimization_arc_20260121_183644",
+  "optimized_results": [
+    {
+      "method": "grid_search",
+      "weights": {
+        "token_accuracy": 0.04145,
+        "semantic_similarity": 0.000233,
+        "number_retention": 0.206833,
+        "final_answer_match": 0.53913,
+        "char_similarity": 0.040195,
+        "avg_confidence": 0.172159
+      },
+      "metrics": {
+        "roc_auc": 0.777,
+        "score_gap": 0.191,
+        "best_accuracy": 0.8524,
+        "best_threshold": 0.44,
+        "mean_correct": 0.7715,
+        "mean_wrong": 0.5805,
+        "std_correct": 0.1214,
+        "std_wrong": 0.2044
+      }
+    }
+  ]
+}

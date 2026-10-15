@@ -1,0 +1,29 @@
+{
+  "task": "gsm8k",
+  "model": "LLaDA-8B-Instruct",
+  "description": "BMC aggregation weights lambda_k (Sec. 4.1) searched on held-out generations; loaded automatically by the evaluation scripts.",
+  "source_run": "bmc_optimization_gsm8k_20260112_112812",
+  "optimized_results": [
+    {
+      "method": "grid_search",
+      "weights": {
+        "token_accuracy": 0.012974,
+        "semantic_similarity": 0.145329,
+        "number_retention": 0.09833,
+        "final_answer_match": 0.382808,
+        "char_similarity": 0.041556,
+        "avg_confidence": 0.319002
+      },
+      "metrics": {
+        "roc_auc": 0.8933,
+        "score_gap": 0.2423,
+        "best_accuracy": 0.8499,
+        "best_threshold": 0.59,
+        "mean_correct": 0.7833,
+        "mean_wrong": 0.541,
+        "std_correct": 0.1125,
+        "std_wrong": 0.1433
+      }
+    }
+  ]
+}
