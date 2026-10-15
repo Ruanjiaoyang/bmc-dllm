@@ -1,0 +1,30 @@
+{
+  "task": "gsm8k",
+  "model": "Dream-v0-Instruct-7B",
+  "description": "BMC aggregation weights lambda_k (Sec. 4.1) searched on held-out generations; loaded automatically by the evaluation scripts.",
+  "source_run": "bmc_optimization_gsm8k_20260121_210204",
+  "optimized_results": [
+    {
+      "method": "bayesian_optimization",
+      "weights": {
+        "token_accuracy": 0.0,
+        "semantic_similarity": 0.247702,
+        "number_retention": 0.117339,
+        "final_answer_match": 0.634959,
+        "char_similarity": 0.0,
+        "avg_confidence": 0.0
+      },
+      "metrics": {
+        "roc_auc": 0.8225,
+        "pr_auc": 0.8619,
+        "score_gap": 0.2863,
+        "best_accuracy": 0.8052,
+        "best_threshold": 0.67,
+        "mean_correct": 0.9057,
+        "mean_wrong": 0.6195,
+        "std_correct": 0.1329,
+        "std_wrong": 0.252
+      }
+    }
+  ]
+}

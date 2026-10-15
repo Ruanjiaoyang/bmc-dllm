@@ -1,0 +1,683 @@
+"""
+Dream模型的正确性检测评估脚本
+对比 Model Confidence, Self-Consistency, Self-Evaluation, BMC
+"""
+import argparse
+import json
+import math
+import os
+import random
+import time
+import glob
+import re
+from pathlib import Path
+from collections import Counter
+
+import numpy as np
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, DistributedSampler
+from tqdm import tqdm
+from transformers import AutoTokenizer, AutoModel
+
+# Dream的任务管理器（已不再使用，改用独立函数）
+# from lm_eval.tasks import TaskManager
+
+# Dream的BMC实现
+from lm_eval.bmc.bmc_core_dream import BMCEstimatorDream
+from eval_bmc_dream import (
+    load_optimized_weights,
+    GSM8KDataset,
+    HumanEvalDataset,
+    MBPPDataset,
+    MATH500Dataset,
+    CustomDistributedSampler,
+    extract_answer,
+    validate_answer
+)
+
+
+def init_seed(seed):
+    """初始化随机种子"""
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+
+
+def setup_ddp():
+    """设置分布式训练"""
+    dist.init_process_group("nccl")
+    local_rank = int(os.environ["LOCAL_RANK"])
+    torch.cuda.set_device(local_rank)
+    return local_rank
+
+
+def cleanup_ddp():
+    """清理分布式训练"""
+    dist.destroy_process_group()
+
+
+class CustomDistributedSampler(DistributedSampler):
+    """自定义分布式采样器"""
+    def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True, seed=0, drop_last=False):
+        if num_replicas is None:
+            if not dist.is_available():
+                raise RuntimeError("Requires distributed package to be available")
+            num_replicas = dist.get_world_size()
+        if rank is None:
+            if not dist.is_available():
+                raise RuntimeError("Requires distributed package to be available")
+            rank = dist.get_rank()
+        if rank >= num_replicas or rank < 0:
+            raise ValueError(f"Invalid rank {rank}, rank should be in [0, {num_replicas - 1}]")
+
+        self.dataset = dataset
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.epoch = 0
+        self.drop_last = drop_last
+
+        if self.drop_last and len(self.dataset) % self.num_replicas != 0:
+            self.num_samples = math.ceil((len(self.dataset) - self.num_replicas) / self.num_replicas)
+            self.total_size = self.num_samples * self.num_replicas
+        else:
+            self.total_size = len(self.dataset)
+            self.num_samples = len(self.dataset) // self.num_replicas + int(
+                rank < (self.total_size % self.num_replicas)
+            )
+
+        self.shuffle = shuffle
+        self.seed = seed
+
+
+def generate_with_confidence(
+    model,
+    tokenizer,
+    input_ids,
+    max_new_tokens=512,
+    diffusion_steps=64,
+    temperature=0.0,
+    return_confidence=False,
+):
+    """
+    使用Dream模型生成，支持返回置信度
+    
+    Args:
+        diffusion_steps: Dream扩散模型的步数
+        return_confidence: 如果为True，返回(output_ids, avg_confidence)
+    
+    Returns:
+        output_ids: 生成的token ids
+        avg_confidence: 平均置信度（如果return_confidence=True），否则为None
+    """
+    with torch.no_grad():
+        # Dream模型使用diffusion_generate方法
+        outputs = model.diffusion_generate(
+            input_ids,
+            max_new_tokens=max_new_tokens,
+            steps=diffusion_steps,
+            temperature=temperature,
+            top_p=0.9,
+            alg="entropy",  # entropy算法会计算置信度
+            return_dict_in_generate=True,
+        )
+        
+        output_ids = outputs.sequences
+        
+        if return_confidence:
+            # Dream模型不直接返回scores，但我们可以通过重新计算logits来估计置信度
+            # 方法：对生成的序列重新计算logits，然后计算每个token的概率
+            batch_size = output_ids.size(0)
+            input_len = input_ids.size(1)
+            generated_len = output_ids.size(1) - input_len
+            
+            if generated_len > 0:
+                # 重新计算生成部分的logits
+                with torch.no_grad():
+                    model_outputs = model(output_ids)
+                    logits = model_outputs.logits
+                
+                # 只关注生成的部分
+                generated_logits = logits[:, input_len-1:-1, :]  # [batch, gen_len, vocab]
+                generated_tokens = output_ids[:, input_len:]  # [batch, gen_len]
+                
+                # 计算每个生成token的概率
+                probs = F.softmax(generated_logits, dim=-1)
+                token_probs = torch.gather(
+                    probs, 
+                    dim=-1, 
+                    index=generated_tokens.unsqueeze(-1)
+                ).squeeze(-1)  # [batch, gen_len]
+                
+                # 计算平均置信度（忽略padding）
+                mask = (generated_tokens != tokenizer.pad_token_id) & (generated_tokens != tokenizer.eos_token_id)
+                if mask.any():
+                    avg_confidence = (token_probs * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+                    # 先转换为float32再转numpy（BFloat16不被numpy直接支持）
+                    avg_confidence = avg_confidence.float().cpu().numpy()
+                else:
+                    avg_confidence = np.ones(batch_size) * 0.5
+            else:
+                avg_confidence = np.ones(batch_size) * 0.5
+            
+            return output_ids, avg_confidence
+        else:
+            # 不需要置信度时返回None
+            return output_ids, None
+
+
+def evaluate_all_methods(
+    model,
+    tokenizer,
+    dataloader,
+    bmc_probe,
+    task_name,
+    max_new_tokens=512,
+    diffusion_steps=64,
+    t_probe=0.9,
+    num_reverse_steps=16,
+    self_consistency_n=10,
+):
+    """
+    使用所有方法评估
+    
+    收集：
+    1. Model Confidence
+    2. Self-Consistency Score
+    3. Self-Evaluation Score
+    4. BMC Score
+    """
+    model.eval()
+    
+    all_results = []
+    device = model.device
+    
+    for batch_idx, batch in enumerate(tqdm(dataloader, disable=(dist.get_rank() != 0))):
+        questions = batch["questions"]  # 复数形式
+        gt_answers = batch["answers"]  # 复数形式
+        prompts = batch["prompts"]  # 从batch中获取预构建的prompts
+        batch_size = len(questions)
+        
+        for sample_idx in range(batch_size):
+            question = questions[sample_idx]
+            gt_answer = gt_answers[sample_idx]
+            prompt = prompts[sample_idx]  # 使用预构建的prompt
+            
+            # 构建prompt (已在collate_fn中完成)
+            # prompt = task_manager.build_prompt(question, task_name)
+            input_ids = tokenizer.encode(prompt, return_tensors='pt').to(device)
+            
+            # ============================================
+            # 1️⃣ 生成主答案 + Model Confidence
+            # ============================================
+            output_ids, confidence_scores = generate_with_confidence(
+                model,
+                tokenizer,
+                input_ids,
+                max_new_tokens=max_new_tokens,
+                diffusion_steps=diffusion_steps,
+                temperature=0.0,
+                return_confidence=True,
+            )
+            
+            main_text = tokenizer.decode(
+                output_ids[0, input_ids.size(1):],
+                skip_special_tokens=True
+            )
+            
+            # 模型置信度
+            model_confidence = float(confidence_scores[0])
+            
+            # 提取答案
+            main_answer = extract_answer(main_text, task_name)
+            
+            # 检查正确性
+            is_correct = validate_answer(main_answer, gt_answer, task_name, question)
+            
+            # ============================================
+            # 2️⃣ Self-Consistency (生成N次)
+            # ============================================
+            if dist.get_rank() == 0 and sample_idx == 0:
+                print(f"\n[Sample {batch_idx}] Running Self-Consistency (N={self_consistency_n})...")
+            
+            sc_answers = []
+            for sc_iter in range(self_consistency_n):
+                sc_output_ids, _ = generate_with_confidence(
+                    model,
+                    tokenizer,
+                    input_ids,
+                    max_new_tokens=max_new_tokens,
+                    diffusion_steps=diffusion_steps,
+                    temperature=0.7,  # 使用非零温度采样
+                    return_confidence=False,
+                )
+                
+                sc_text = tokenizer.decode(
+                    sc_output_ids[0, input_ids.size(1):],
+                    skip_special_tokens=True
+                )
+                sc_answer = extract_answer(sc_text, task_name)
+                if sc_answer is not None:
+                    sc_answers.append(str(sc_answer))
+            
+            # 计算Self-Consistency分数（多数答案的比例）
+            if len(sc_answers) > 0:
+                answer_counts = Counter(sc_answers)
+                most_common_answer, most_common_count = answer_counts.most_common(1)[0]
+                self_consistency_score = most_common_count / len(sc_answers)
+            else:
+                self_consistency_score = 0.0
+            
+            # ============================================
+            # 3️⃣ Self-Evaluation (让模型评估)
+            # ============================================
+            if dist.get_rank() == 0 and sample_idx == 0:
+                print(f"[Sample {batch_idx}] Running Self-Evaluation...")
+            
+            # Self-Evaluation提示词（改进版：更明确的指令）
+            eval_prompt = f"""Question: {question}
+
+Your Answer: {main_text}
+
+Is this answer correct? Respond with a confidence score between 0.0 (definitely wrong) and 1.0 (definitely correct).
+
+IMPORTANT: Output ONLY a single decimal number between 0.0 and 1.0, with NO explanation or additional text.
+
+Example format: 0.85
+
+Your confidence score:"""
+            
+            eval_input_ids = tokenizer.encode(eval_prompt, return_tensors='pt').to(device)
+            
+            eval_output_ids, _ = generate_with_confidence(
+                model,
+                tokenizer,
+                eval_input_ids,
+                max_new_tokens=64,  # 🔥 FIX: 增加到64（与LLaDA一致）
+                diffusion_steps=diffusion_steps,
+                temperature=0.0,
+                return_confidence=False,
+            )
+            
+            eval_text = tokenizer.decode(
+                eval_output_ids[0, eval_input_ids.size(1):],
+                skip_special_tokens=True
+            ).strip()
+            
+            # 提取数值分数（与LLaDA-bmc对齐）
+            # 尝试匹配: "0.85", "0.9", "1.0", etc.
+            score_match = re.search(r'(\d+\.?\d*)', eval_text)
+            if score_match:
+                try:
+                    self_eval_score = float(score_match.group(1))
+                    # 如果是0-10范围，归一化到0-1
+                    if self_eval_score > 1.0:
+                        self_eval_score = self_eval_score / 10.0
+                    self_eval_score = np.clip(self_eval_score, 0.0, 1.0)
+                    
+                    # 调试信息
+                    if dist.get_rank() == 0 and sample_idx == 0:
+                        print(f"  Self-Eval raw output: '{eval_text}'")
+                        print(f"  Self-Eval parsed score: {self_eval_score:.4f}")
+                except:
+                    self_eval_score = 0.5
+                    if dist.get_rank() == 0 and sample_idx == 0:
+                        print(f"  ⚠️  Self-Eval parsing failed: '{eval_text}'")
+            else:
+                self_eval_score = 0.5
+                if dist.get_rank() == 0 and sample_idx == 0:
+                    print(f"  ⚠️  Self-Eval no number found: '{eval_text}'")
+            
+            # ============================================
+            # 4️⃣ BMC Score
+            # ============================================
+            if bmc_probe is not None:
+                if dist.get_rank() == 0 and sample_idx == 0:
+                    print(f"[Sample {batch_idx}] Running BMC...")
+                
+                try:
+                    bmc_result = bmc_probe.probe(
+                        question=question,
+                        answer=main_text,
+                        t_probe=t_probe,
+                        num_reverse_steps=num_reverse_steps,
+                    )
+                    bmc_score = bmc_result['consistency_score']
+                except Exception as e:
+                    print(f"⚠️  BMC failed: {e}")
+                    bmc_score = 0.0
+            else:
+                bmc_score = -1.0  # BMC被跳过
+            
+            # ============================================
+            # 📊 汇总结果
+            # ============================================
+            result = {
+                "question": question,
+                "prompt": prompt,
+                "generated_text": main_text,
+                "generated_answer": str(main_answer) if main_answer else None,
+                "ground_truth": str(gt_answer),
+                "is_correct": int(is_correct),
+                
+                # 四种方法的分数
+                "model_confidence": float(model_confidence),
+                "self_consistency_score": float(self_consistency_score),
+                "self_eval_score": float(self_eval_score),
+                "bmc_score": float(bmc_score),
+                
+                # Self-Consistency详情
+                "sc_answers": sc_answers,
+                "sc_answer_counts": dict(Counter(sc_answers)) if sc_answers else {},
+                
+                # Self-Evaluation详情
+                "self_eval_text": eval_text,
+            }
+            
+            all_results.append(result)
+            
+            # 打印示例
+            if dist.get_rank() == 0 and sample_idx == 0:
+                print(f"\n{'='*80}")
+                print(f"Question: {question[:100]}...")
+                print(f"Generated Answer: {main_answer}")
+                print(f"Ground Truth: {str(gt_answer)[:100]}...")
+                print(f"Is Correct: {is_correct}")
+                print("-" * 80)
+                print(f"📊 Scores:")
+                print(f"  Model Confidence:     {model_confidence:.4f}")
+                print(f"  Self-Consistency:     {self_consistency_score:.4f}")
+                print(f"  Self-Evaluation:      {self_eval_score:.4f}")
+                print(f"  BMC Score:            {bmc_score:.4f}")
+                print(f"{'='*80}\n")
+    
+    # 计算准确率
+    num_correct = sum(r['is_correct'] for r in all_results)
+    accuracy = num_correct / len(all_results) if all_results else 0.0
+    
+    if dist.get_rank() == 0:
+        print(f"\n{'='*80}")
+        print(f"📊 Overall Statistics:")
+        print(f"  Total Samples: {len(all_results)}")
+        print(f"  Correct: {num_correct}")
+        print(f"  Accuracy: {accuracy:.2%}")
+        print(f"{'='*80}\n")
+    
+    return {
+        "results": all_results,
+        "accuracy": accuracy,
+        "num_samples": len(all_results),
+        "num_correct": num_correct,
+    }
+
+
+if __name__ == "__main__":
+    init_seed(42)
+    local_rank = setup_ddp()
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_path", type=str, required=True)
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--dataset", type=str, choices=["gsm8k", "math", "gpqa", "arc"], default="gsm8k")
+    parser.add_argument("--max_new_tokens", type=int, default=128)
+    parser.add_argument("--diffusion_steps", type=int, default=64,
+                       help="Dream扩散模型的步数")
+    parser.add_argument("--output_dir", type=str, default="results_correctness_detection_dream/")
+    
+    # BMC 参数
+    parser.add_argument("--t_probe", type=float, default=0.9)
+    parser.add_argument("--num_reverse_steps", type=int, default=16)
+    parser.add_argument("--num_samples", type=int, default=4,
+                       help="BMC多次采样次数（减少随机性）")
+    parser.add_argument("--semantic_model_path", type=str, default=None)
+    parser.add_argument("--skip_bmc", action="store_true", help="跳过BMC评估")
+    parser.add_argument("--adaptive_t", action="store_true", default=True,
+                       help="使用自适应t_probe")
+    parser.add_argument("--aggressive_scoring", action="store_true", default=True,
+                       help="使用激进评分策略")
+    parser.add_argument("--optimized_weights_path", type=str, default=None,
+                       help="优化权重文件路径")
+    
+    # Self-Consistency 参数
+    parser.add_argument("--self_consistency_n", type=int, default=10)
+    
+    # 采样
+    parser.add_argument("--subsample", type=int, default=100,
+                       help="评估样本数（-1表示全部）")
+    
+    args = parser.parse_args()
+    
+    # 加载模型
+    if dist.get_rank() == 0:
+        print(f"\n{'='*80}")
+        print("Loading Dream model...")
+        print(f"Model path: {args.model_path}")
+        print(f"{'='*80}\n")
+    
+    model = AutoModel.from_pretrained(
+        args.model_path,
+        trust_remote_code=True,
+        torch_dtype=torch.bfloat16
+    ).to(local_rank)
+    
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_path,
+        trust_remote_code=True
+    )
+    
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    
+    # 初始化任务管理器（已不再使用）
+    # task_manager = TaskManager()
+    
+    # 🔥 加载优化权重
+    # 如果指定了weights_path，使用指定的文件
+    # 如果没有指定，自动搜索任务对应的最佳权重
+    optimized_weights = None
+    if not args.skip_bmc:
+        optimized_weights = load_optimized_weights(
+            task_name=args.dataset,
+            weights_path=args.optimized_weights_path,  # 可以是None，会自动搜索
+            verbose=(dist.get_rank() == 0)
+        )
+    
+    # 初始化 BMC 探针
+    bmc_probe = None
+    if not args.skip_bmc:
+        if args.semantic_model_path is None:
+            print("❌ ERROR: --semantic_model_path is required when BMC is enabled!")
+            cleanup_ddp()
+            exit(1)
+        
+        if dist.get_rank() == 0:
+            print("\n" + "="*80)
+            print("Initializing BMC Probe...")
+            print(f"Semantic model: {args.semantic_model_path}")
+            print(f"Num samples: {args.num_samples}")
+            print(f"Adaptive t: {args.adaptive_t}")
+            print(f"Aggressive scoring: {args.aggressive_scoring}")
+            if optimized_weights:
+                print("🔥 Using optimized weights (overrides aggressive_scoring)")
+            print("="*80)
+        
+        try:
+            # 🔥 获取任务对应的system prompt（与基础BMC实验对齐）
+            task_system_prompts = {
+                "gsm8k": """You are a math expert. You will be given a question to solve. Solve it step by step. Wrap the final answer in a \\boxed{}. 
+Respond in the following format:
+<reasoning>
+Your reasoning here
+</reasoning>
+<answer>
+\\boxed{...}
+</answer>""",
+                "math": """You are a math expert. You will be given a question to solve. Solve it step by step. Wrap the final answer in a \\boxed{}.
+Respond in the following format:
+<reasoning>
+Your reasoning here
+</reasoning>
+<answer>
+\\boxed{...}
+</answer>""",
+                "gpqa": """You are an expert in graduate-level science (physics, chemistry, biology). You will be given a multiple-choice question with 4 options (A, B, C, D).
+
+These questions are designed to be challenging and require:
+- Deep scientific knowledge
+- Critical thinking and reasoning
+- Careful analysis of each option
+
+Read the question carefully, analyze each option, and select the correct answer.
+
+Respond in the following format:
+<reasoning>
+Your detailed reasoning and analysis here
+</reasoning>
+<answer>
+\\boxed{X}
+</answer>
+
+Where X is one of: A, B, C, or D""",
+                "arc": """You are an expert in science reasoning.
+You will be given a multiple-choice question with options (A, B, C, D, or E).
+
+Respond in the following format:
+<reasoning>
+Your detailed reasoning and analysis here
+</reasoning>
+<answer>
+\\boxed{X}
+</answer>
+
+Where X is one of the available options (A, B, C, D, or E)""",
+            }
+            
+            task_system_prompt = task_system_prompts.get(args.dataset, "")
+            
+            # 🔥 获取任务配置（与基础BMC实验对齐）
+            from lm_eval.bmc.task_utils import get_task_config
+            task_config = get_task_config(args.dataset)
+            
+            bmc_probe = BMCEstimatorDream(
+                model=model,
+                tokenizer=tokenizer,
+                device=f"cuda:{local_rank}",
+                semantic_model_path=args.semantic_model_path,
+                adaptive_t=args.adaptive_t,
+                num_samples=args.num_samples,
+                aggressive_scoring=(not optimized_weights and args.aggressive_scoring),
+                diffusion_steps=args.diffusion_steps,  # 🔥 NEW: 添加diffusion_steps
+                optimized_weights=optimized_weights,
+                task_name=args.dataset,  # 🔥 NEW: 添加task_name
+                task_config=task_config,  # 🔥 NEW: 添加task_config
+                system_prompt=task_system_prompt,  # 🔥 NEW: 添加system_prompt
+                use_chat_template=True,  # 🔥 NEW: 添加use_chat_template
+            )
+            if dist.get_rank() == 0:
+                print(f"✓ BMC initialized (num_samples={args.num_samples})")
+                print("="*80 + "\n")
+        except Exception as e:
+            if dist.get_rank() == 0:
+                print(f"❌ BMC initialization failed: {e}")
+            bmc_probe = None
+    
+    # 加载数据集
+    if args.dataset == "gsm8k":
+        dataset = GSM8KDataset(
+            tokenizer=tokenizer,
+            subsample=args.subsample,
+        )
+    elif args.dataset == "humaneval":
+        dataset = HumanEvalDataset(
+            tokenizer=tokenizer,
+            subsample=args.subsample,
+        )
+    elif args.dataset == "mbpp":
+        dataset = MBPPDataset(
+            tokenizer=tokenizer,
+            subsample=args.subsample,
+        )
+    elif args.dataset == "math":
+        dataset = MATH500Dataset(
+            tokenizer=tokenizer,
+            subsample=args.subsample,
+        )
+    elif args.dataset == "gpqa":
+        from eval_bmc_dream import GPQADataset
+        dataset = GPQADataset(
+            tokenizer=tokenizer,
+            subsample=args.subsample,
+        )
+    elif args.dataset == "arc":
+        from eval_bmc_dream import ARCDataset
+        dataset = ARCDataset(
+            tokenizer=tokenizer,
+            subsample=args.subsample,
+        )
+    else:
+        raise ValueError(f"Unsupported dataset: {args.dataset}")
+    
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        sampler=CustomDistributedSampler(dataset, shuffle=False),
+        collate_fn=dataset.collate_fn,
+    )
+    
+    # 运行评估
+    metrics = evaluate_all_methods(
+        model,
+        tokenizer,
+        dataloader,
+        bmc_probe,
+        args.dataset,
+        max_new_tokens=args.max_new_tokens,
+        diffusion_steps=args.diffusion_steps,
+        t_probe=args.t_probe,
+        num_reverse_steps=args.num_reverse_steps,
+        self_consistency_n=args.self_consistency_n,
+    )
+    
+    # 保存结果
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    current_rank = dist.get_rank()
+    is_main_process = (current_rank == 0)
+    
+    filename = f"{args.output_dir}/{args.dataset}_correctness_detection_rank{current_rank}.json"
+    
+    if is_main_process:
+        print(f"Saving results to: {filename}")
+    
+    with open(filename, "w") as f:
+        json.dump({
+            "results": metrics["results"],
+            "metrics": {
+                "accuracy": metrics["accuracy"],
+                "num_samples": metrics["num_samples"],
+                "num_correct": metrics["num_correct"],
+            },
+            "config": {
+                "model_path": args.model_path,
+                "dataset": args.dataset,
+                "max_new_tokens": args.max_new_tokens,
+                "diffusion_steps": args.diffusion_steps,
+                "t_probe": args.t_probe,
+                "num_reverse_steps": args.num_reverse_steps,
+                "num_samples": args.num_samples,
+                "self_consistency_n": args.self_consistency_n,
+                "subsample": args.subsample,
+            }
+        }, f, indent=2)
+    
+    if is_main_process:
+        print(f"\n{'='*80}")
+        print("✅ Evaluation completed!")
+        print(f"Results saved to: {args.output_dir}")
+        print(f"{'='*80}\n")
+    
+    cleanup_ddp()

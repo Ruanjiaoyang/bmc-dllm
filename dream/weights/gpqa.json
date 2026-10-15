@@ -1,0 +1,30 @@
+{
+  "task": "gpqa",
+  "model": "Dream-v0-Instruct-7B",
+  "description": "BMC aggregation weights lambda_k (Sec. 4.1) searched on held-out generations; loaded automatically by the evaluation scripts.",
+  "source_run": "bmc_optimization_gpqa_20260121_231204",
+  "optimized_results": [
+    {
+      "method": "bayesian_optimization",
+      "weights": {
+        "token_accuracy": 0.0,
+        "semantic_similarity": 0.0,
+        "number_retention": 0.0,
+        "final_answer_match": 0.827978,
+        "char_similarity": 0.172022,
+        "avg_confidence": 0.0
+      },
+      "metrics": {
+        "roc_auc": 0.6255,
+        "pr_auc": 0.314,
+        "score_gap": 0.1598,
+        "best_accuracy": 0.741,
+        "best_threshold": 1.0,
+        "mean_correct": 0.7371,
+        "mean_wrong": 0.5773,
+        "std_correct": 0.236,
+        "std_wrong": 0.343
+      }
+    }
+  ]
+}

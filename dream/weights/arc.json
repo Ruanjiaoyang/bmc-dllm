@@ -1,0 +1,30 @@
+{
+  "task": "arc",
+  "model": "Dream-v0-Instruct-7B",
+  "description": "BMC aggregation weights lambda_k (Sec. 4.1) searched on held-out generations; loaded automatically by the evaluation scripts.",
+  "source_run": "bmc_optimization_arc_20260121_224554",
+  "optimized_results": [
+    {
+      "method": "bayesian_optimization",
+      "weights": {
+        "token_accuracy": 0.0,
+        "semantic_similarity": 0.0,
+        "number_retention": 0.265443,
+        "final_answer_match": 0.734557,
+        "char_similarity": 0.0,
+        "avg_confidence": 0.0
+      },
+      "metrics": {
+        "roc_auc": 0.8035,
+        "pr_auc": 0.9515,
+        "score_gap": 0.2924,
+        "best_accuracy": 0.8848,
+        "best_threshold": 0.64,
+        "mean_correct": 0.9657,
+        "mean_wrong": 0.6733,
+        "std_correct": 0.0931,
+        "std_wrong": 0.292
+      }
+    }
+  ]
+}

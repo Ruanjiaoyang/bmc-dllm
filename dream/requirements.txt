@@ -1,0 +1,19 @@
+# Dream-v0-Instruct-7B environment (follows the official Dream repo: torch 2.5.1 + transformers 4.46.2).
+# Install with:  pip install -r requirements.txt   (also installs the bundled lm_eval package in editable mode)
+torch==2.5.1
+transformers==4.46.2
+accelerate
+datasets
+sentence-transformers==3.4.1
+scikit-learn
+scipy
+pandas
+matplotlib
+seaborn
+xgboost
+bayesian-optimization
+sympy
+math-verify
+antlr4-python3-runtime==4.11
+evaluate
+-e .

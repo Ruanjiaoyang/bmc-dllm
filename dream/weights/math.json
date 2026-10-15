@@ -1,0 +1,30 @@
+{
+  "task": "math",
+  "model": "Dream-v0-Instruct-7B",
+  "description": "BMC aggregation weights lambda_k (Sec. 4.1) searched on held-out generations; loaded automatically by the evaluation scripts.",
+  "source_run": "bmc_optimization_math_20260121_215837",
+  "optimized_results": [
+    {
+      "method": "bayesian_optimization",
+      "weights": {
+        "token_accuracy": 0.0,
+        "semantic_similarity": 0.452558,
+        "number_retention": 0.142789,
+        "final_answer_match": 0.404653,
+        "char_similarity": 0.0,
+        "avg_confidence": 0.0
+      },
+      "metrics": {
+        "roc_auc": 0.8249,
+        "pr_auc": 0.6603,
+        "score_gap": 0.21,
+        "best_accuracy": 0.768,
+        "best_threshold": 0.8,
+        "mean_correct": 0.8048,
+        "mean_wrong": 0.5948,
+        "std_correct": 0.1519,
+        "std_wrong": 0.1616
+      }
+    }
+  ]
+}
