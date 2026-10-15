@@ -28,6 +28,8 @@ bash scripts/train.sh gsm8k outcome    # Outcome RL baseline
 Checkpoints (LoRA adapters) go to `rl/checkpoints/<task>_spg_<reward>/` and logs to `rl/logs/`. Useful overrides:
 `MODEL_PATH`, `SAVE_DIR`, `BMC_WEIGHTS` (default `../llada/weights/<task>.json`), `ACCELERATE_CONFIG`.
 The default accelerate config (`spg/slurm_scripts/accelerate_genai_a100.yaml`) assumes 8 GPUs on one node.
+`spg/slurm_scripts/accelerate_deepspeed_zero2.yaml` is an alternative for the same topology that shards the optimizer
+state with DeepSpeed ZeRO-2; select it with `ACCELERATE_CONFIG=rl/spg/slurm_scripts/accelerate_deepspeed_zero2.yaml`.
 
 ## Evaluate
 
